@@ -354,6 +354,20 @@ def normalize(x: quat) -> quat:
    ...
 
 @overload
+def length_sq(x: vec2) -> float:
+   """
+   Compute the squared length of a 2d vector.
+   """
+   ...
+
+@overload
+def length_sq (x: vec3) -> float:
+   """
+   Compute the squared length of a 3d vector.
+   """
+   ...
+
+@overload
 def transpose(m: mat22) -> mat22:
    """
    Return the transpose of the matrix m
@@ -420,6 +434,27 @@ def determinant(m: mat33) -> float:
 def determinant(m: mat44) -> float:
    """
    Return the determinant of the matrix m
+   """
+   ...
+
+@overload
+def trace(m: mat22) -> float:
+   """
+   Return the trace of the matrix m
+   """
+   ...
+
+@overload
+def trace(m: mat33) -> float:
+   """
+   Return the trace of the matrix m
+   """
+   ...
+
+@overload
+def trace(m: mat44) -> float:
+   """
+   Return the trace of the matrix m
    """
    ...
 

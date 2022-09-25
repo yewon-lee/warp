@@ -102,6 +102,8 @@ add_builtin("length", input_types={"x": vec3}, value_type=float, group="Vector M
     doc="Compute the length of a 3d vector.")
 add_builtin("length", input_types={"x": vec4}, value_type=float, group="Vector Math",
     doc="Compute the length of a 4d vector.")
+add_builtin("length", input_types={"x": quat}, value_type=float, group="Vector Math",
+    doc="Compute the length of a quaternion.")
 add_builtin("normalize", input_types={"x": vec2}, value_type=vec2, group="Vector Math",
     doc="Compute the normalized value of x, if length(x) is 0 then the zero vector is returned.")
 add_builtin("normalize", input_types={"x": vec3}, value_type=vec3, group="Vector Math",
@@ -110,6 +112,10 @@ add_builtin("normalize", input_types={"x": vec4}, value_type=vec4, group="Vector
     doc="Compute the normalized value of x, if length(x) is 0 then the zero vector is returned.")
 add_builtin("normalize", input_types={"x": quat}, value_type=quat, group="Vector Math",
     doc="Compute the normalized value of x, if length(x) is 0 then the zero quat is returned.")
+add_builtin("length_sq", input_types={"x": vec2}, value_type=float, group="Vector Math",
+    doc="Compute the squared length of a 2d vector.")
+add_builtin("length_sq", input_types={"x": vec3}, value_type=float, group="Vector Math",
+    doc="Compute the squared length of a 3d vector.")
 
 add_builtin("transpose", input_types={"m": mat22}, value_type=mat22, group="Vector Math",
     doc="Return the transpose of the matrix m")
@@ -133,6 +139,13 @@ add_builtin("determinant", input_types={"m": mat33}, value_type=float, group="Ve
     doc="Return the determinant of the matrix m")
 add_builtin("determinant", input_types={"m": mat44}, value_type=float, group="Vector Math",
     doc="Return the determinant of the matrix m")
+    
+add_builtin("trace", input_types={"m": mat22}, value_type=float, group="Vector Math",
+    doc="Return the trace of the matrix m")
+add_builtin("trace", input_types={"m": mat33}, value_type=float, group="Vector Math",
+    doc="Return the trace of the matrix m")
+add_builtin("trace", input_types={"m": mat44}, value_type=float, group="Vector Math",
+    doc="Return the trace of the matrix m")
 
 add_builtin("diag", input_types={"d": vec2}, value_type=mat22, group="Vector Math",
     doc="Returns a matrix with the components of the vector d on the diagonal")
@@ -431,11 +444,17 @@ add_builtin("intersect_tri_tri", input_types={"v0": vec3, "v1": vec3, "v2": vec3
 add_builtin("mesh_eval_face_normal", input_types={"id": uint64, "face": int}, value_type=vec3, group="Geometry",
     doc="""Evaluates the face normal the mesh given a face index.""")
 
+add_builtin("mesh_get_num_points", input_types={"id": uint64}, value_type=int, group="Geometry",
+    doc="""Returns the number of points of the mesh given its index.""")
+    
+add_builtin("mesh_get_num_faces", input_types={"id": uint64}, value_type=int, group="Geometry",
+    doc="""Returns the number of faces of the mesh given its index.""")
+
 add_builtin("mesh_get_point", input_types={"id": uint64, "index": int}, value_type=vec3, group="Geometry",
-    doc="""Returns the point of the mesh given a index.""")
+    doc="""Returns the point of the mesh given its index.""")
 
 add_builtin("mesh_get_velocity", input_types={"id": uint64, "index": int}, value_type=vec3, group="Geometry",
-    doc="""Returns the velocity of the mesh given a index.""")
+    doc="""Returns the velocity of the mesh given its index.""")
 
 add_builtin("mesh_get_index", input_types={"id": uint64, "index": int}, value_type=int, group="Geometry",
     doc="""Returns the point-index of the mesh given a face-vertex index.""")
@@ -717,6 +736,9 @@ add_builtin("index", input_types={"a": mat33, "i": int, "j": int}, value_type=fl
 
 add_builtin("index", input_types={"a": mat44, "i": int}, value_type=vec4,  group="Utility")
 add_builtin("index", input_types={"a": mat44, "i": int, "j": int}, value_type=float,  group="Utility")
+
+add_builtin("index", input_types={"a": transform, "i": int}, value_type=float,  group="Utility")
+add_builtin("index", input_types={"a": spatial_vector, "i": int}, value_type=float,  group="Utility")
 
 
 for t in scalar_types + vector_types:
