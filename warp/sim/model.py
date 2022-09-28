@@ -2090,7 +2090,7 @@ class ModelBuilder:
             # contacts
             m.allocate_soft_contacts(64*1024)
 
-            m.rigid_contact_max = self.num_envs * 256      
+            m.rigid_contact_max = self.num_envs * 64*1024    
             m.rigid_contact_count = wp.zeros(1, dtype=wp.int32)
             m.rigid_contact_body0 = wp.zeros(m.rigid_contact_max, dtype=wp.int32)
             m.rigid_contact_body1 = wp.zeros(m.rigid_contact_max, dtype=wp.int32)
