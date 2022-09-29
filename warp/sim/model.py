@@ -447,6 +447,7 @@ class Model:
         return tensors
 
     # builds contacts
+    # TODO rename prepare_collisions
     def collide(self, state: State):
         """Constructs a set of contacts between rigid bodies and ground
 
@@ -2090,7 +2091,7 @@ class ModelBuilder:
             # contacts
             m.allocate_soft_contacts(64*1024)
 
-            m.rigid_contact_max = self.num_envs * 64*1024    
+            m.rigid_contact_max = self.num_envs * 256      
             m.rigid_contact_count = wp.zeros(1, dtype=wp.int32)
             m.rigid_contact_body0 = wp.zeros(m.rigid_contact_max, dtype=wp.int32)
             m.rigid_contact_body1 = wp.zeros(m.rigid_contact_max, dtype=wp.int32)
@@ -2140,7 +2141,7 @@ class ModelBuilder:
 
             # enable ground plane
             m.ground = True
-            m.ground_plane = wp.array((*self.upvector, 0.0), dtype=wp.float32, device=device)
+            m.ground_plane = wp.vec4(*self.upvector, 0.0, device=device)
             m.gravity = np.array(self.upvector) * self.gravity
 
             m.enable_tri_collisions = False

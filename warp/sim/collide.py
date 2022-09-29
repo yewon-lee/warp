@@ -147,7 +147,7 @@ def create_soft_contacts(
     shape_geo_type: wp.array(dtype=int), 
     shape_geo_id: wp.array(dtype=wp.uint64),
     shape_geo_scale: wp.array(dtype=wp.vec3),
-    soft_contact_thickness: float,
+    margin: float,
     #outputs,
     soft_contact_count: wp.array(dtype=int),
     soft_contact_particle: wp.array(dtype=int),
@@ -210,7 +210,7 @@ def create_soft_contacts(
         face_v = float(0.0)
         sign = float(0.0)
 
-        if (wp.mesh_query_point(mesh, x_local/geo_scale[0], soft_contact_thickness, sign, face_index, face_u, face_v)):
+        if (wp.mesh_query_point(mesh, x_local/geo_scale[0], margin, sign, face_index, face_u, face_v)):
 
             shape_p = wp.mesh_eval_position(mesh, face_index, face_u, face_v)
             shape_v = wp.mesh_eval_velocity(mesh, face_index, face_u, face_v)
@@ -224,7 +224,7 @@ def create_soft_contacts(
             v = shape_v
 
 
-    if (d < soft_contact_thickness):
+    if (d < margin):
 
         index = wp.atomic_add(soft_contact_count, 0, 1) 
 
@@ -468,7 +468,7 @@ def volume_grad(volume: wp.uint64,
 
 @wp.kernel
 def update_rigid_ground_contacts(
-    ground_plane: wp.array(dtype=float),
+    ground_plane: wp.vec4,
     rigid_body: wp.array(dtype=int),
     body_q: wp.array(dtype=wp.transform),
     shape_X_co: wp.array(dtype=wp.transform),
@@ -704,16 +704,17 @@ def collide(model, state, experimental_sdf_collision=False):
                 model.shape_geo_type, 
                 model.shape_geo_id,
                 model.shape_geo_scale,
-                model.soft_contact_thickness,
+                model.soft_contact_margin,
+            ],
+            outputs = [
                 model.soft_contact_count,
                 model.soft_contact_particle,
                 model.soft_contact_body,
                 model.soft_contact_body_pos,
                 model.soft_contact_body_vel,
                 model.soft_contact_normal,
-                model.soft_contact_max],
-                # outputs
-            outputs=[],
+                model.soft_contact_max
+            ],
             device=model.device)
 
     # clear old count
