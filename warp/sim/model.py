@@ -483,7 +483,7 @@ class Model:
         normal = []
         margin = []
 
-        ground_plane = self.ground_plane.numpy()
+        ground_plane = np.array(self.ground_plane)
 
         def add_contact(b0, b1, t, p0, d, s0, s1):
             body0.append(b0)
@@ -2091,7 +2091,7 @@ class ModelBuilder:
             # contacts
             m.allocate_soft_contacts(64*1024)
 
-            m.rigid_contact_max = self.num_envs * 256      
+            m.rigid_contact_max = self.num_envs * 4096      
             m.rigid_contact_count = wp.zeros(1, dtype=wp.int32)
             m.rigid_contact_body0 = wp.zeros(m.rigid_contact_max, dtype=wp.int32)
             m.rigid_contact_body1 = wp.zeros(m.rigid_contact_max, dtype=wp.int32)
