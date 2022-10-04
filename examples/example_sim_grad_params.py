@@ -128,24 +128,24 @@ class CubeSlopeSim:
 
             body_id = builder.add_body(
                 origin=wp.transform((-10.0, 5.0, 0.0), rot))
-            # builder.add_shape_box(
-            #     body=body_id,
-            #     hx=hx,
-            #     hy=hy,
-            #     hz=hz,
-            #     density=density,
-            #     ke=2.e+3,
-            #     kd=0.0,
-            #     mu=0.2,
-            #     restitution=0.0)
-            builder.add_shape_sphere(
+            builder.add_shape_box(
                 body=body_id,
-                radius=hx,
+                hx=hx,
+                hy=hy,
+                hz=hz,
                 density=density,
                 ke=2.e+3,
                 kd=0.0,
                 mu=0.2,
                 restitution=0.0)
+            # builder.add_shape_sphere(
+            #     body=body_id,
+            #     radius=hx,
+            #     density=density,
+            #     ke=2.e+3,
+            #     kd=0.0,
+            #     mu=0.2,
+            #     restitution=0.0)
 
         # finalize model
         self.model = builder.finalize(self.device)
