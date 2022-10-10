@@ -2002,48 +2002,48 @@ class XPBDIntegrator:
                         ],
                         device=model.device)
 
-                if (model.has_restitution):
-                    wp.launch(kernel=apply_rigid_restitution,
-                            dim=model.rigid_contact_max,
-                            inputs=[
-                                state_out.body_q,
-                                state_out.body_qd,
-                                state_out.body_q_prev,
-                                state_out.body_qd_prev,
-                                model.body_inv_mass,
-                                model.body_inv_inertia,
-                                model.rigid_contact_count,
-                                model.rigid_contact_body0,
-                                model.rigid_contact_body1,
-                                model.rigid_contact_point0,
-                                model.rigid_contact_point1,
-                                model.rigid_contact_offset0,
-                                model.rigid_contact_offset1,
-                                model.rigid_contact_normal,
-                                model.rigid_contact_shape0,
-                                model.rigid_contact_shape1,
-                                model.shape_materials,
-                                model.rigid_active_contact_distance_prev,
-                                model.rigid_contact_inv_weight,
-                                model.gravity,
-                                model.rigid_contact_bounce_threshold,
-                                dt,
-                            ],
-                            outputs=[
-                                state_out.body_deltas,
-                            ],
-                            device=model.device)
+                # if (model.has_restitution):
+                #     wp.launch(kernel=apply_rigid_restitution,
+                #             dim=model.rigid_contact_max,
+                #             inputs=[
+                #                 state_out.body_q,
+                #                 state_out.body_qd,
+                #                 state_out.body_q_prev,
+                #                 state_out.body_qd_prev,
+                #                 model.body_inv_mass,
+                #                 model.body_inv_inertia,
+                #                 model.rigid_contact_count,
+                #                 model.rigid_contact_body0,
+                #                 model.rigid_contact_body1,
+                #                 model.rigid_contact_point0,
+                #                 model.rigid_contact_point1,
+                #                 model.rigid_contact_offset0,
+                #                 model.rigid_contact_offset1,
+                #                 model.rigid_contact_normal,
+                #                 model.rigid_contact_shape0,
+                #                 model.rigid_contact_shape1,
+                #                 model.shape_materials,
+                #                 model.rigid_active_contact_distance_prev,
+                #                 model.rigid_contact_inv_weight,
+                #                 model.gravity,
+                #                 model.rigid_contact_bounce_threshold,
+                #                 dt,
+                #             ],
+                #             outputs=[
+                #                 state_out.body_deltas,
+                #             ],
+                #             device=model.device)
 
-                    wp.launch(kernel=apply_body_delta_velocities,
-                            dim=model.body_count,
-                            inputs=[
-                                state_out.body_qd,
-                                state_out.body_deltas,
-                            ],
-                            outputs=[
-                                state_out.body_qd
-                            ],
-                            device=model.device)
+                #     wp.launch(kernel=apply_body_delta_velocities,
+                #             dim=model.body_count,
+                #             inputs=[
+                #                 state_out.body_qd,
+                #                 state_out.body_deltas,
+                #             ],
+                #             outputs=[
+                #                 state_out.body_qd
+                #             ],
+                #             device=model.device)
 
             state_out.particle_q = particle_q
             state_out.particle_qd = particle_qd

@@ -769,7 +769,7 @@ def collide(model, state, experimental_sdf_collision=False):
             device=model.device
         )
 
-        # print("rigid_contact_count:", state.rigid_contact_count.numpy()[0])
+        # print("rigid_contact_count:", model.rigid_contact_count.numpy()[0])
 
     
     if experimental_sdf_collision:
