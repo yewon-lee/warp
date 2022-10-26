@@ -330,13 +330,12 @@ def update_rigid_ground_contacts(
 
 @wp.kernel
 def broadphase_collision_pairs(
+    contact_pairs: wp.array(dtype=int, ndim=2),
     body_q: wp.array(dtype=wp.transform),
     shape_X_bs: wp.array(dtype=wp.transform),
     shape_body: wp.array(dtype=int),
     shape_geo_type: wp.array(dtype=int),
     collision_radius: wp.array(dtype=float),
-    collision_group: wp.array(dtype=int),
-    collision_mask: wp.array(dtype=int, ndim=2),
     rigid_contact_max: int,
     mesh_num_points: wp.array(dtype=int),
     rigid_contact_margin: float,
@@ -346,17 +345,9 @@ def broadphase_collision_pairs(
     contact_shape1: wp.array(dtype=int),
     contact_point_id: wp.array(dtype=int),
 ):
-    shape_a, shape_b = wp.tid()
-    if shape_a >= shape_b:
-        return
-    if collision_mask[shape_a, shape_b] == 0:
-        # print("collision mask")
-        return
-    cg_a = collision_group[shape_a]
-    cg_b = collision_group[shape_b]
-    if cg_a != cg_b and cg_a > -1 and cg_b > -1:
-        # print("collision group")
-        return
+    tid = wp.tid()
+    shape_a = contact_pairs[tid, 0]
+    shape_b = contact_pairs[tid, 1]
 
     rigid_a = shape_body[shape_a]
     rigid_b = shape_body[shape_b]
@@ -376,9 +367,9 @@ def broadphase_collision_pairs(
     d = wp.length(p_a - p_b)
     r_a = collision_radius[shape_a]
     r_b = collision_radius[shape_b]
-    if d > r_a + r_b + rigid_contact_margin:
-        # print("too far")
-        return
+    # if d > r_a + r_b + rigid_contact_margin:
+    #     # print("too far")
+    #     return
 
     type_a = shape_geo_type[shape_a]
     type_b = shape_geo_type[shape_b]
@@ -409,17 +400,18 @@ def broadphase_collision_pairs(
                 if index + i >= rigid_contact_max:
                     print("Number of rigid contacts exceeded limit. Increase Model.rigid_contact_max.")
                     return
-                contact_shape0[index + i] = actual_shape_a
-                contact_shape1[index + i] = actual_shape_b
+                contact_shape0[index + i] = shape_a
+                contact_shape1[index + i] = shape_b
                 contact_point_id[index + i] = i
             # allocate contact points from mesh B against A
             for i in range(num_contacts_b):
                 if index + num_contacts_a + i >= rigid_contact_max:
                     print("Number of rigid contacts exceeded limit. Increase Model.rigid_contact_max.")
                     return
-                contact_shape0[index + num_contacts_a + i] = actual_shape_b
-                contact_shape1[index + num_contacts_a + i] = actual_shape_a
+                contact_shape0[index + num_contacts_a + i] = shape_b
+                contact_shape1[index + num_contacts_a + i] = shape_a
                 contact_point_id[index + num_contacts_a + i] = i
+        return
     else:
         print("broadphase_collision_pairs: unsupported geometry type")
 
@@ -873,18 +865,17 @@ def collide(model, state, experimental_sdf_collision=False):
     # clear old count
     model.rigid_contact_count.zero_()
 
-    if (model.body_count):
+    if (True and model.body_count):
         wp.launch(
             kernel=broadphase_collision_pairs,
-            dim=(model.shape_count, model.shape_count),
+            dim=model.shape_contact_pair_count,
             inputs=[
+                model.shape_contact_pairs,
                 state.body_q,
                 model.shape_transform,
                 model.shape_body,
                 model.shape_geo_type,
                 model.shape_collision_radius,
-                model.shape_collision_group,
-                model.shape_collision_mask,
                 model.rigid_contact_max,
                 model.mesh_num_points,
                 model.rigid_contact_margin,
