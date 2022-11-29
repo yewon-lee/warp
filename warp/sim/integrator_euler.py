@@ -28,7 +28,7 @@ def integrate_particles(x: wp.array(dtype=wp.vec3),
                         v: wp.array(dtype=wp.vec3),
                         f: wp.array(dtype=wp.vec3),
                         w: wp.array(dtype=float),
-                        gravity: wp.array(dtype=float),
+                        gravity: wp.vec3,
                         dt: float,
                         x_new: wp.array(dtype=wp.vec3),
                         v_new: wp.array(dtype=wp.vec3)):
@@ -41,9 +41,8 @@ def integrate_particles(x: wp.array(dtype=wp.vec3),
 
     inv_mass = w[tid]
 
-    g = wp.vec3(gravity[0], gravity[1], gravity[2])
     # simple semi-implicit Euler. v1 = v0 + a dt, x1 = x0 + v1 dt
-    v1 = v0 + (f0 * inv_mass + g * wp.step(0.0 - inv_mass)) *dt
+    v1 = v0 + (f0 * inv_mass + gravity * wp.step(0.0 - inv_mass)) *dt
     x1 = x0 + v1 * dt
 
     x_new[tid] = x1
@@ -60,7 +59,7 @@ def integrate_bodies(body_q: wp.array(dtype=wp.transform),
                      I: wp.array(dtype=wp.mat33),
                      inv_m: wp.array(dtype=float),
                      inv_I: wp.array(dtype=wp.mat33),
-                     gravity: wp.array(dtype=float),
+                     gravity: wp.vec3,
                      angular_damping: float,
                      dt: float,
                      # outputs
@@ -96,8 +95,7 @@ def integrate_bodies(body_q: wp.array(dtype=wp.transform),
     x_com = x0 + wp.quat_rotate(r0, body_com[tid])
  
     # linear part
-    g = wp.vec3(gravity[0], gravity[1], gravity[2])
-    v1 = v0 + (f0 * inv_mass + g * wp.nonzero(inv_mass)) * dt
+    v1 = v0 + (f0 * inv_mass + gravity * wp.nonzero(inv_mass)) * dt
     x1 = x_com + v1 * dt
  
     # angular part (compute in body frame)
@@ -1295,8 +1293,6 @@ def eval_body_joints(body_q: wp.array(dtype=wp.transform),
         t_total += eval_joint_force(angles[1], wp.dot(wp.quat_rotate(q_w, axis_1), w_err), joint_target[qd_start+1], joint_target_ke[qd_start+1],joint_target_kd[qd_start+1], joint_act[qd_start+1], joint_limit_lower[qd_start+1], joint_limit_upper[qd_start+1], joint_limit_ke[qd_start+1], joint_limit_kd[qd_start+1], wp.quat_rotate(q_w, axis_1))
         
         # last axis (fixed)
-        # if angles[2] < -1e-3:
-            # XXX prevent numerical instability at singularity
         t_total += eval_joint_force(angles[2], wp.dot(wp.quat_rotate(q_w, axis_2), w_err), 0.0, joint_attach_ke, joint_attach_kd*angular_damping_scale, 0.0, 0.0, 0.0, 0.0, 0.0, wp.quat_rotate(q_w, axis_2))
 
         f_total += x_err*joint_attach_ke + v_err*joint_attach_kd
@@ -1455,7 +1451,7 @@ def compute_forces(model, state, particle_f, body_f, requires_grad):
                   outputs=[particle_f],
                   device=model.device)
 
-    if (model.body_count):
+    if (model.rigid_contact_max and (model.ground and model.shape_ground_contact_pair_count or model.shape_contact_pair_count)):
         wp.launch(kernel=eval_rigid_contacts,
                   dim=model.rigid_contact_max,
                   inputs=[
@@ -1478,38 +1474,38 @@ def compute_forces(model, state, particle_f, body_f, requires_grad):
                   ],
                   device=model.device)
 
-        if (model.joint_count):
-            wp.launch(kernel=eval_body_joints,
-                    dim=model.joint_count,
-                    inputs=[
-                        state.body_q,
-                        state.body_qd,
-                        model.body_com,
-                        model.joint_q_start,
-                        model.joint_qd_start,
-                        model.joint_type,
-                        model.joint_parent,
-                        model.joint_X_p,
-                        model.joint_X_c,
-                        model.joint_axis,
-                        model.joint_target,
-                        model.joint_act,
-                        model.joint_target_ke,
-                        model.joint_target_kd,
-                        model.joint_limit_lower,
-                        model.joint_limit_upper,
-                        model.joint_limit_ke,
-                        model.joint_limit_kd,
-                        model.joint_attach_ke,
-                        model.joint_attach_kd,
-                    ],
-                    outputs=[
-                        body_f
-                    ],
-                    device=model.device)
+    if (model.joint_count):
+        wp.launch(kernel=eval_body_joints,
+                dim=model.joint_count,
+                inputs=[
+                    state.body_q,
+                    state.body_qd,
+                    model.body_com,
+                    model.joint_q_start,
+                    model.joint_qd_start,
+                    model.joint_type,
+                    model.joint_parent,
+                    model.joint_X_p,
+                    model.joint_X_c,
+                    model.joint_axis,
+                    model.joint_target,
+                    model.joint_act,
+                    model.joint_target_ke,
+                    model.joint_target_kd,
+                    model.joint_limit_lower,
+                    model.joint_limit_upper,
+                    model.joint_limit_ke,
+                    model.joint_limit_kd,
+                    model.joint_attach_ke,
+                    model.joint_attach_kd,
+                ],
+                outputs=[
+                    body_f
+                ],
+                device=model.device)
 
     # particle shape contact
-    if (model.particle_count and model.shape_count):
+    if (model.particle_count and model.shape_count > 1):
         
         wp.launch(kernel=eval_soft_contacts,
                     dim=model.soft_contact_max,
