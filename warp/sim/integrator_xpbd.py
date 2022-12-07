@@ -408,44 +408,34 @@ def apply_body_deltas(
     p0 = wp.transform_get_translation(tf)
     q0 = wp.transform_get_rotation(tf)
 
-    x_com = p0 + wp.quat_rotate(q0, body_com[tid])
 
     weight = 1.0
     if (constraint_inv_weights):
         if (constraint_inv_weights[tid] > 0.0):
             weight = 1.0 / constraint_inv_weights[tid]
 
-    dp = wp.spatial_bottom(delta) * inv_m * weight
+    dp = wp.spatial_bottom(delta) * (inv_m * weight)
     dq = wp.spatial_top(delta) * weight
     dq = wp.quat_rotate(q0, inv_I * wp.quat_rotate_inv(q0, dq))
 
-    # update position
-    p = x_com + dp * dt * dt
-
     # update orientation
-    q = q0 + 0.5 * wp.quat(dq * dt * dt, 0.0) * q0
-    q = wp.normalize(q)
+    q1 = q0 + 0.5 * wp.quat(dq * dt * dt, 0.0) * q0
+    q1 = wp.normalize(q1)
 
-    q_out[tid] = wp.transform(p - wp.quat_rotate(q, body_com[tid]), q)
+    # update position
+    com = body_com[tid]
+    x_com = p0 + wp.quat_rotate(q0, com)
+    p1 = x_com + dp * dt * dt
+    p1 -= wp.quat_rotate(q1, com)
+
+    q_out[tid] = wp.transform(p1, q1)
 
     v0 = wp.spatial_bottom(qd_in[tid])
     w0 = wp.spatial_top(qd_in[tid])
 
-    # linear part
+    # update linear and angular velocity
     v1 = v0 + dp * dt
-    # x1 = x_com + v1 * dt
-
-    # # angular part
-    # # wb = wp.quat_rotate_inv(r0, w0)
-    # # gyr = -(inv_inertia * wp.cross(wb, inertia*wb))
-    # # w1 = w0 + dt * wp.quat_rotate(r0, gyr)
-
-    # angular part (compute in body frame)
-    wb = wp.quat_rotate_inv(q0, w0 + dq * dt)
-    tb = -wp.cross(wb, body_I[tid]*wb)   # coriolis forces
-
-    w1 = wp.quat_rotate(q0, wb + inv_I * tb * dt)
-    # r1 = wp.normalize(r0 + wp.quat(w1, 0.0) * r0 * 0.5 * dt)
+    w1 = w0 + dq * dt
 
     qd_out[tid] = wp.spatial_vector(w1, v1)
 
@@ -965,49 +955,6 @@ def compute_contact_constraint_delta(
 
     return deltaLambda*relaxation
 
-
-@wp.func
-def compute_constraint_delta(
-    err: float,
-    derr: float,
-    tf_a: wp.transform,
-    tf_b: wp.transform,
-    m_inv_a: float,
-    m_inv_b: float,
-    I_inv_a: wp.mat33,
-    I_inv_b: wp.mat33,
-    linear_a: wp.vec3, 
-    linear_b: wp.vec3, 
-    angular_a: wp.vec3, 
-    angular_b: wp.vec3, 
-    lambda_in: float,
-    compliance: float,
-    damping: float,
-    relaxation: float,
-    dt: float
-) -> float:
-    denom = 0.0
-    denom += wp.length_sq(linear_a)*m_inv_a
-    denom += wp.length_sq(linear_b)*m_inv_b
-
-    q1 = wp.transform_get_rotation(tf_a)
-    q2 = wp.transform_get_rotation(tf_b)
-
-    # Eq. 2-3 (make sure to project into the frame of the body)
-    rot_angular_a = wp.quat_rotate_inv(q1, angular_a)
-    rot_angular_b = wp.quat_rotate_inv(q2, angular_b)
-
-    denom += wp.dot(rot_angular_a, I_inv_a * rot_angular_a)
-    denom += wp.dot(rot_angular_b, I_inv_b * rot_angular_b)
-
-    alpha = compliance
-    gamma = compliance * damping
-
-    deltaLambda = -(err + alpha*lambda_in + gamma*derr) / (dt*(dt + gamma)*denom + alpha)
-
-    return deltaLambda*relaxation
-
-
 @wp.func
 def compute_positional_correction(
     err: float,
@@ -1047,8 +994,6 @@ def compute_positional_correction(
     deltaLambda = -(err + alpha*lambda_in + gamma*derr) / (dt*(dt + gamma)*denom + alpha)
 
     return deltaLambda
-
-
 
 @wp.func
 def compute_angular_correction(
@@ -1346,7 +1291,7 @@ def apply_rigid_restitution(
     active_contact_point0: wp.array(dtype=wp.vec3),
     active_contact_point1: wp.array(dtype=wp.vec3),
     contact_inv_weight: wp.array(dtype=float),
-    gravity: wp.array(dtype=float),
+    gravity: wp.vec3,
     dt: float,
     # outputs
     deltas: wp.array(dtype=wp.spatial_vector),
@@ -1417,9 +1362,8 @@ def apply_rigid_restitution(
     r_b = bx_b - wp.transform_point(X_wb_b, com_b)
     
     n = contact_normal[tid]
-    g = wp.vec3(gravity[0], gravity[1], gravity[2])
     if (body_a >= 0):
-        v_a = velocity_at_point(body_qd_prev[body_a], r_a) + g*dt
+        v_a = velocity_at_point(body_qd_prev[body_a], r_a) + gravity*dt
         v_a_new = velocity_at_point(body_qd[body_a], r_a)
         q_a = wp.transform_get_rotation(X_wb_a_prev)
         rxn = wp.quat_rotate_inv(q_a, wp.cross(r_a, n))
@@ -1431,7 +1375,7 @@ def apply_rigid_restitution(
         inv_mass += inv_mass_a
         # inv_mass += m_inv_a + wp.dot(rxn, I_inv_a * rxn)
     if (body_b >= 0):
-        v_b = velocity_at_point(body_qd_prev[body_b], r_b) + g*dt
+        v_b = velocity_at_point(body_qd_prev[body_b], r_b) + gravity*dt
         v_b_new = velocity_at_point(body_qd[body_b], r_b)
         q_b = wp.transform_get_rotation(X_wb_b_prev)
         rxn = wp.quat_rotate_inv(q_b, wp.cross(r_b, n))
@@ -1552,10 +1496,12 @@ class XPBDIntegrator:
             if (model.body_count):
                 if requires_grad:
                     state_out.body_q_prev = wp.clone(state_in.body_q)
-                    state_out.body_qd_prev = wp.clone(state_in.body_qd)
+                    if (self.enable_restitution):
+                        state_out.body_qd_prev = wp.clone(state_in.body_qd)
                 else:
                     state_out.body_q_prev.assign(state_in.body_q)
-                    state_out.body_qd_prev.assign(state_in.body_qd)
+                    if (self.enable_restitution):
+                        state_out.body_qd_prev.assign(state_in.body_qd)
 
                 if (model.joint_count):
                     wp.launch(
@@ -1682,8 +1628,6 @@ class XPBDIntegrator:
                                         state_out.body_deltas],
                                     device=model.device)
 
-                        # print(state_out.body_deltas.numpy().max())
-
                     # damped springs
                     if (model.spring_count):
 
@@ -1728,8 +1672,6 @@ class XPBDIntegrator:
                     else:
                         new_particle_q = particle_q
                         new_particle_qd = particle_qd
-                    # new_particle_q = wp.clone(particle_q)
-                    # new_particle_qd = wp.clone(particle_qd)
 
                     wp.launch(kernel=apply_deltas,
                             dim=model.particle_count,
