@@ -15,6 +15,46 @@ from collections import defaultdict
 
 import numpy as np
 
+
+def compute_env_offsets(num_envs, env_offset=(5.0, 0.0, 5.0), upaxis="y"):
+    # compute positional offsets per environment
+    nonzeros = np.nonzero(env_offset)[0]
+    num_dim = nonzeros.shape[0]
+    if num_dim > 0:
+        side_length = int(np.ceil(num_envs**(1.0/num_dim)))
+        env_offsets = []
+    else:
+        env_offsets = np.zeros((num_envs, 3))
+    if num_dim == 1:
+        for i in range(num_envs):
+            env_offsets.append(i*env_offset)
+    elif num_dim == 2:
+        for i in range(num_envs):
+            d0 = i // side_length
+            d1 = i % side_length
+            offset = np.zeros(3)
+            offset[nonzeros[0]] = d0 * env_offset[nonzeros[0]]
+            offset[nonzeros[1]] = d1 * env_offset[nonzeros[1]]
+            env_offsets.append(offset)
+    elif num_dim == 3:
+        for i in range(num_envs):
+            d0 = i // (side_length*side_length)
+            d1 = (i // side_length) % side_length
+            d2 = i % side_length
+            offset = np.zeros(3)
+            offset[0] = d0 * env_offset[0]
+            offset[1] = d1 * env_offset[1]
+            offset[2] = d2 * env_offset[2]
+            env_offsets.append(offset)
+    env_offsets = np.array(env_offsets)
+    min_offsets = np.min(env_offsets, axis=0)
+    correction = min_offsets + (np.max(env_offsets, axis=0) - min_offsets) / 2.0
+    if isinstance(upaxis, str):
+        upaxis = "xyz".index(upaxis.lower())
+    correction[upaxis] = 0.0  # ensure the envs are not shifted below the ground plane
+    env_offsets -= correction
+    return env_offsets
+
 @wp.kernel
 def update_vbo(
     shape_ids: wp.array(dtype=int),
@@ -121,6 +161,8 @@ class TinyRenderer:
             shape_geo_scale = model.shape_geo_scale.numpy()
             shape_transform = model.shape_transform.numpy()
             # matplotlib "tab10" colors
+            
+
             colors10 = [
                 [ 31, 119, 180],
                 [255, 127,  14],
@@ -132,12 +174,14 @@ class TinyRenderer:
                 [127, 127, 127],
                 [188, 189,  34],
                 [ 23, 190, 207]]
+
             # loop over shapes excluding the ground plane
             num_shapes = (model.shape_count-1) // self.num_envs
             for s in range(num_shapes):
                 geo_type = shape_geo_type[s]
                 geo_scale = shape_geo_scale[s] * self.scaling
                 geo_src = shape_geo_src[s]
+                color = colors10[len(self.geo_shape)%10]
 
                 # shape transform in body frame
                 body = shape_body[s]
@@ -153,9 +197,7 @@ class TinyRenderer:
                     if geo_hash in self.geo_shape:
                         shape = self.geo_shape[geo_hash]
                     else:
-                        color1 = (np.array(colors10[s%10]) + 50.0).clip(0, 255).astype(int)
-                        color2 = (np.array(colors10[s%10]) + 90.0).clip(0, 255).astype(int)
-                        texture = self.create_check_texture(256, 256, color1=color1, color2=color2)
+                        texture = self.create_check_texture(256, 256, color1=color)
                         faces = [0, 1, 2, 2, 3, 0]
                         normal = (0.0, 1.0, 0.0)
                         width = (geo_scale[0] if geo_scale[0] > 0.0 else 100.0)
@@ -175,7 +217,7 @@ class TinyRenderer:
                     if geo_hash in self.geo_shape:
                         shape = self.geo_shape[geo_hash]
                     else:
-                        texture = self.create_check_texture(color1=colors10[s%10])
+                        texture = self.create_check_texture(color1=color)
                         shape = self.app.register_graphics_unit_sphere_shape(p.EnumSphereLevelOfDetail.SPHERE_LOD_HIGH, texture)
                     scale *= float(geo_scale[0]) * 2.0  # diameter
 
@@ -186,22 +228,22 @@ class TinyRenderer:
                         radius = float(geo_scale[0])
                         half_width = float(geo_scale[1])
                         up_axis = 0
-                        texture = self.create_check_texture(color1=colors10[s%10])
+                        texture = self.create_check_texture(color1=color)
                         shape = self.app.register_graphics_capsule_shape(radius, half_width, up_axis, texture)
 
                 elif (geo_type == warp.sim.GEO_BOX):
                     if geo_hash in self.geo_shape:
                         shape = self.geo_shape[geo_hash]
                     else:
-                        texture = self.create_check_texture(color1=colors10[s%10])
+                        texture = self.create_check_texture(color1=color)
                         shape = self.app.register_cube_shape(geo_scale[0], geo_scale[1], geo_scale[2], texture, 4)
 
                 elif (geo_type == warp.sim.GEO_MESH):
                     if geo_hash in self.geo_shape:
                         shape = self.geo_shape[geo_hash]
                     else:
-                        texture = self.create_check_texture(1, 1, color1=colors10[s%10], color2=colors10[s%10])
-                        faces = geo_src.indices.reshape((-1, 3))
+                        texture = self.create_check_texture(1, 1, color1=color, color2=color)
+                        faces = np.array(geo_src.indices).reshape((-1, 3))
                         vertices = np.array(geo_src.vertices)
                         # convert vertices to (x,y,z,w, nx,ny,nz, u,v) format
                         gfx_vertices = np.zeros((len(faces)*3, 9))
@@ -289,41 +331,9 @@ class TinyRenderer:
         self.instance_envs = wp.array(
             np.tile(np.arange(self.num_envs, dtype=np.int32), self.instances_per_env), dtype=wp.int32,
             device="cuda", owner=False, ndim=1)
-        # compute offsets per environment
-        nonzeros = np.nonzero(env_offset)[0]
-        num_dim = nonzeros.shape[0]
-        if num_dim > 0:
-            side_length = int(np.ceil(self.num_envs**(1.0/num_dim)))
-            self.env_offsets = []
-        else:
-            self.env_offsets = np.zeros((self.num_envs, 3))
-        if num_dim == 1:
-            for i in range(self.num_envs):
-                self.env_offsets.append(i*env_offset)
-        elif num_dim == 2:
-            for i in range(self.num_envs):
-                d0 = i // side_length
-                d1 = i % side_length
-                offset = np.zeros(3)
-                offset[nonzeros[0]] = d0 * env_offset[nonzeros[0]]
-                offset[nonzeros[1]] = d1 * env_offset[nonzeros[1]]
-                self.env_offsets.append(offset)
-        elif num_dim == 3:
-            for i in range(self.num_envs):
-                d0 = i // (side_length*side_length)
-                d1 = (i // side_length) % side_length
-                d2 = i % side_length
-                offset = np.zeros(3)
-                offset[0] = d0 * env_offset[0]
-                offset[1] = d1 * env_offset[1]
-                offset[2] = d2 * env_offset[2]
-                self.env_offsets.append(offset)
-        self.env_offsets = np.array(self.env_offsets)
-        min_offsets = np.min(self.env_offsets, axis=0)
-        correction = min_offsets + (np.max(self.env_offsets, axis=0) - min_offsets) / 2.0
-        correction[self.cam_axis] = 0.0  # ensure the envs are not shifted below the ground plane
-        self.env_offsets -= correction
-        self.env_offsets = wp.array(self.env_offsets, dtype=wp.vec3, device="cuda")
+        
+        env_offsets = compute_env_offsets(self.num_envs, env_offset, self.cam_axis)
+        self.env_offsets = wp.array(env_offsets, dtype=wp.vec3, device="cuda")
         self.instance_shape = wp.array(self.instance_shape, dtype=wp.int32, device="cuda")
         # make sure the static arrays are on the GPU
         if self.model.shape_transform.device.is_cuda:
