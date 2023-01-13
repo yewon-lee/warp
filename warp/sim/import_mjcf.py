@@ -132,6 +132,7 @@ def parse_mjcf(
                 upper_limit=(np.deg2rad(joint_range[1]) if is_angular else joint_range[1]),
                 target_ke=parse_float(joint, "stiffness", stiffness),
                 target_kd=parse_float(joint, "damping", damping),
+                limit_ke=limit_ke, limit_kd=limit_kd,
                 mode=mode,
             )
             if is_angular:
