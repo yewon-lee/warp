@@ -1135,7 +1135,7 @@ def handle_contact_pairs(
         face_u = float(0.0)  
         face_v = float(0.0)
         sign = float(0.0)
-        # res = wp.mesh_query_point(mesh_b, query_b_local/geo_scale_b[0], max_dist, sign, face_index, face_u, face_v)
+        res = wp.mesh_query_point(mesh_b, query_b_local/geo_scale_b[0], max_dist, sign, face_index, face_u, face_v)
 
         if (res):
             shape_p = wp.mesh_eval_position(mesh_b, face_index, face_u, face_v)
