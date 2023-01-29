@@ -1095,12 +1095,13 @@ def eval_body_joints(body_q: wp.array(dtype=wp.transform),
                      joint_qd_start: wp.array(dtype=int),
                      joint_type: wp.array(dtype=int),
                      joint_enabled: wp.array(dtype=int),
+                     joint_child: wp.array(dtype=int),
                      joint_parent: wp.array(dtype=int),
                      joint_X_p: wp.array(dtype=wp.transform),
                      joint_X_c: wp.array(dtype=wp.transform),
                      joint_axis: wp.array(dtype=wp.vec3),
                      joint_axis_start: wp.array(dtype=int),
-                     joint_axis_count: wp.array(dtype=int, ndim=2),
+                     joint_axis_dim: wp.array(dtype=int, ndim=2),
                      joint_target: wp.array(dtype=float),
                      joint_act: wp.array(dtype=float),
                      joint_target_ke: wp.array(dtype=float),
@@ -1120,7 +1121,7 @@ def eval_body_joints(body_q: wp.array(dtype=wp.transform),
     if (joint_enabled[tid] == 0 or type == wp.sim.JOINT_FREE):
         return
 
-    c_child = tid
+    c_child = joint_child[tid]
     c_parent = joint_parent[tid]
 
     X_pj = joint_X_p[tid]
@@ -1219,7 +1220,7 @@ def eval_body_joints(body_q: wp.array(dtype=wp.transform),
         axis_p = wp.transform_vector(X_wp, axis)
         axis_c = wp.transform_vector(X_wc, axis)
 
-        # swing twist decomposition
+        # swing twist decomposition      
         twist = quat_twist(axis, r_err)
 
         q = wp.acos(twist[3])*2.0*wp.sign(wp.dot(axis, wp.vec3(twist[0], twist[1], twist[2])))
@@ -1509,12 +1510,13 @@ def compute_forces(model, state, particle_f, body_f, requires_grad):
                     model.joint_qd_start,
                     model.joint_type,
                     model.joint_enabled,
+                    model.joint_child,
                     model.joint_parent,
                     model.joint_X_p,
                     model.joint_X_c,
                     model.joint_axis,
                     model.joint_axis_start,
-                    model.joint_axis_count,
+                    model.joint_axis_dim,
                     model.joint_target,
                     model.joint_act,
                     model.joint_target_ke,

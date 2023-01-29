@@ -32,10 +32,12 @@ from warp.sim.collide import count_contact_points
 GEO_SPHERE = wp.constant(0)
 GEO_BOX = wp.constant(1)
 GEO_CAPSULE = wp.constant(2)
-GEO_MESH = wp.constant(3)
-GEO_SDF = wp.constant(4)
-GEO_PLANE = wp.constant(5)
-GEO_NONE = wp.constant(6)
+GEO_CYLINDER = wp.constant(3)
+GEO_CONE = wp.constant(4)
+GEO_MESH = wp.constant(5)
+GEO_SDF = wp.constant(6)
+GEO_PLANE = wp.constant(7)
+GEO_NONE = wp.constant(8)
 
 # body joint types
 JOINT_PRISMATIC = wp.constant(0)
@@ -62,12 +64,13 @@ class ShapeContactMaterial:
     mu: wp.array(dtype=float)  # The coefficient of friction
     restitution: wp.array(dtype=float)  # The coefficient of restitution (only used by XPBD integrator)
 
+# Axis (linear or angular) of a joint that can have bounds and be driven towards a target
 class JointAxis:
     def __init__(
         self,
         axis,
-        lower_limit=-np.inf,
-        upper_limit=np.inf,
+        limit_lower=-np.inf,
+        limit_upper=np.inf,
         limit_ke=100.0,
         limit_kd=10.0,
         target=None,
@@ -76,14 +79,14 @@ class JointAxis:
         mode=JOINT_MODE_LIMIT,
     ):
         self.axis = np.array(wp.normalize(np.array(axis, dtype=np.float32)))
-        self.lower_limit = lower_limit
-        self.upper_limit = upper_limit
+        self.limit_lower = limit_lower
+        self.limit_upper = limit_upper
         self.limit_ke = limit_ke
         self.limit_kd = limit_kd
         if target is not None:
             self.target = target
-        elif lower_limit > 0.0 or upper_limit < 0.0:
-            self.target = 0.5 * (lower_limit + upper_limit)
+        elif limit_lower > 0.0 or limit_upper < 0.0:
+            self.target = 0.5 * (limit_lower + limit_upper)
         else:
             self.target = 0.0
         self.target_ke = target_ke
@@ -260,7 +263,6 @@ class State:
         
         self.particle_count = 0
         self.body_count = 0
-        self.lbs_vertex_count = 0
 
     def clear_forces(self):
 
@@ -378,13 +380,6 @@ class Model:
         self.shape_materials = None
         self.shape_contact_thickness = None
         self.body_shapes = {}
-        
-        self.shape_is_lbs = None
-        self.lbs_body_ids = set()
-        self.lbs_weights = None
-        self.lbs_G = None
-        self.lbs_rest_shape = None
-        self.lbs_contact_idx = None
 
         self.spring_indices = None
         self.spring_rest_length = None
@@ -447,7 +442,6 @@ class Model:
         self.tet_count = 0
         self.edge_count = 0
         self.spring_count = 0
-        self.lbs_link_count = 0
 
         self.soft_contact_distance = 0.1
         self.soft_contact_margin = 0.2
@@ -588,6 +582,7 @@ class Model:
             ],
             device=self.device,
             record_tape=False)
+        # count ground contacts
         wp.launch(
             kernel=count_contact_points,
             dim=self.shape_ground_contact_pair_count,
@@ -650,8 +645,6 @@ class Model:
         self.rigid_contact_inv_weight = wp.zeros(len(self.body_q), dtype=wp.float32, device=self.device, requires_grad=requires_grad)
         # number of contact constraints before the solver iterations
         self.rigid_contact_inv_weight_prev = wp.zeros(len(self.body_q), dtype=wp.float32, device=self.device, requires_grad=requires_grad)
-
-        self.lbs_contact_idx = wp.array(-1*np.ones(self.rigid_contact_max), dtype=wp.int32, device=self.device)
 
     def flatten(self):
         """Returns a list of Tensors stored by the model
@@ -767,8 +760,6 @@ class ModelBuilder:
         self.shape_collision_radius = []
         # whether the shape collides with the ground
         self.shape_ground_collision = []
-        # whether the shape is a linear-blend skin (LBS) mesh
-        self.shape_is_lbs = []
 
         # filtering to ignore certain collision pairs
         self.shape_collision_filter_pairs = set()
@@ -807,12 +798,6 @@ class ModelBuilder:
         self.muscle_activation = []
         self.muscle_bodies = []
         self.muscle_points = []
-        
-        # LBS
-        self.lbs_weights = []
-        self.lbs_body_ids = set()
-        self.lbs_G = []
-        self.lbs_rest_shape = []
 
         # rigid bodies
         self.body_mass = []
@@ -863,10 +848,9 @@ class ModelBuilder:
         self.joint_q_start = []
         self.joint_qd_start = []
         self.joint_axis_start = []
-        self.joint_axis_count = []
+        self.joint_axis_dim = []
         self.articulation_start = []
 
-        self.joint_count = 0
         self.joint_dof_count = 0
         self.joint_coord_count = 0
         self.joint_axis_total_count = 0
@@ -897,7 +881,50 @@ class ModelBuilder:
         # number of rigid contact points to allocate in the model during self.finalize() per environment
         # if setting is None, the number of worst-case number of contacts will be calculated in self.finalize()
         self.num_rigid_contacts_per_env = None
-        
+
+    @property
+    def shape_count(self):
+        return len(self.shape_geo_type)
+
+    @property
+    def body_count(self):
+        return len(self.body_q)
+
+    @property
+    def joint_count(self):
+        return len(self.joint_type)
+
+    @property
+    def joint_axis_count(self):
+        return len(self.joint_axis)
+
+    @property
+    def particle_count(self):
+        return len(self.particle_q)
+
+    @property
+    def tri_count(self):
+        return len(self.tri_poses)
+
+    @property
+    def tet_count(self):
+        return len(self.tet_poses)
+
+    @property
+    def edge_count(self):
+        return len(self.edge_rest_angle)
+
+    @property
+    def spring_count(self):
+        return len(self.spring_rest_length)
+    
+    @property
+    def muscle_count(self):
+        return len(self.muscle_start)
+
+    @property
+    def articulation_count(self):
+        return len(self.articulation_start)
 
     # an articulation is a set of contiguous bodies bodies from articulation_start[i] to articulation_start[i+1]
     # these are used for computing forward kinematics e.g.:
@@ -939,6 +966,7 @@ class ModelBuilder:
         self.add_articulation() 
 
         start_body_idx = len(self.body_mass)
+        start_shape_idx = len(self.shape_geo_type)
 
         # offset the indices
         self.joint_parent.extend([p + self.joint_count if p != -1 else -1 for p in articulation.joint_parent])
@@ -948,7 +976,8 @@ class ModelBuilder:
         self.joint_qd_start.extend([c + self.joint_dof_count for c in articulation.joint_qd_start])
 
         self.shape_body.extend([b + start_body_idx for b in articulation.shape_body])
-        
+        for b, shapes in articulation.body_shapes.items():
+            self.body_shapes[b + start_body_idx] = [s + start_shape_idx for s in shapes]
 
         self.joint_axis_start.extend([a + self.joint_axis_total_count for a in articulation.joint_axis_start])
 
@@ -989,7 +1018,7 @@ class ModelBuilder:
             "joint_X_c",
             "joint_armature",
             "joint_axis",
-            "joint_axis_count",
+            "joint_axis_dim",
             "joint_axis_mode",
             "joint_name",
             "joint_qd",
@@ -1012,7 +1041,6 @@ class ModelBuilder:
             "shape_geo_type",
             "shape_geo_scale",
             "shape_geo_src",
-            "shape_is_lbs",
             "shape_material_ke",
             "shape_material_kd",
             "shape_material_kf",
@@ -1021,15 +1049,12 @@ class ModelBuilder:
             "shape_contact_thickness",
             "shape_collision_radius",
             "shape_ground_collision",
-            "lbs_weights",
-            "lbs_G",
-            "lbs_rest_shape",
         ]
 
         for attr in rigid_articulation_attrs:
             getattr(self, attr).extend(getattr(articulation, attr))
         
-        self.joint_count += articulation.joint_count
+        # self.joint_count += articulation.joint_count
         self.joint_dof_count += articulation.joint_dof_count
         self.joint_coord_count += articulation.joint_coord_count
         self.joint_axis_total_count += articulation.joint_axis_total_count
@@ -1045,48 +1070,21 @@ class ModelBuilder:
     def add_body(
         self, 
         origin: Transform,
-        parent: int=-1,
-        joint_xform: Transform=wp.transform(),    # transform of joint in parent space
-        joint_xform_child: Transform=wp.transform(),
-        joint_axis: Vec3=(0.0, 0.0, 0.0),
-        joint_type: wp.constant=JOINT_FREE,
-        joint_target_ke: float=0.0,
-        joint_target_kd: float=0.0,
-        joint_target: float=None,
-        joint_limit_ke: float=100.0,
-        joint_limit_kd: float=10.0,
-        joint_limit_lower: float=-1.e+3,
-        joint_limit_upper: float=1.e+3,
         armature: float=0.0,
-        joint_twist_lower: float=-1.e+3,
-        joint_twist_upper: float=1.e+3,
-        joint_linear_compliance: float=0.0,
-        joint_angular_compliance: float=0.0,
         com: Vec3=np.zeros(3),
         I_m: Mat33=np.zeros((3, 3)), 
         m: float=0.0,
-        body_name: str=None,
-        joint_name: str=None) -> int:
+        name: str=None) -> int:
 
         """Adds a rigid body to the model.
 
         Args:
-            parent: The index of the parent body
-            origin: The location of the joint in the parent's local frame connecting this body
-            joint_xform: The transform of the body's joint in parent space
-            joint_xform_child: Transform body's joint in local space
-            joint_axis : Joint axis in local body space
-            joint_type : Type of the joint, e.g.: JOINT_PRISMATIC, JOINT_REVOLUTE, etc.
-            joint_target_ke: Stiffness of the joint PD controller
-            joint_target_kd: Damping of the joint PD controller
-            joint_limit_ke: Stiffness of the joint limits
-            joint_limit_kd: Damping of the joint limits
-            joint_limit_lower: Lower limit of the joint coordinate
-            joint_limit_upper: Upper limit of the joint coordinate
-            armature: Artificial inertia added around the joint axis
+            origin: The location of the body in the world frame
+            armature: Artificial inertia added to the body
             com: The center of mass of the body w.r.t its origin
             I_m: The 3x3 inertia tensor of the body (specified relative to the center of mass)
             m: Mass of the body
+            name: Name of the body (optional)
 
         Returns:
             The index of the body in the model
@@ -1095,16 +1093,8 @@ class ModelBuilder:
             If the mass (m) is zero then the body is treated as kinematic with no dynamics
 
         """
-        def quat_dof_limit(limit: float) -> float:
-            # XXX axis-angle space
-            return limit
-            # we cannot handle joint limits outside of [-2pi, 2pi]
-            if wp.abs(limit) > 2*np.pi:
-                return limit
-            else:
-                return wp.sin(0.5 * limit)
 
-        child = len(self.body_mass)
+        body_id = len(self.body_mass)
 
         # body data
         inertia = I_m + np.eye(3)*armature
@@ -1125,181 +1115,9 @@ class ModelBuilder:
         self.body_q.append(origin)
         self.body_qd.append(wp.spatial_vector())
 
-        self.body_name.append(body_name or f"body {child}")
-        self.body_shapes[child] = []
-
-        # # joint data
-        # self.joint_type.append(joint_type.val)
-        # self.joint_parent.append(parent)
-        # self.joint_child.append(child)
-        # self.joint_X_p.append(joint_xform)
-        # self.joint_X_c.append(joint_xform_child)
-        # self.joint_name.append(joint_name or f"joint {self.joint_count}")
-
-        # axis = np.array(joint_axis)
-
-        # self.joint_armature.append(joint_armature)
-        # self.joint_axis.append(axis)
-
-
-        # # self.joint_linear_axis_start.append(len(self.joint_linear_axis))
-        # # self.joint_angular_axis_start.append(len(self.joint_angular_axis))
-
-        # pos_limit = np.zeros(6)
-        # ang_limit = np.zeros(6)
-        # target_pos = np.zeros(3)
-        # target_pos_ke = np.zeros(3)
-        # target_pos_kd = np.zeros(3)
-        # target_ang = np.zeros(3)
-        # target_ang_ke = np.zeros(3)
-        # target_ang_kd = np.zeros(3)
-        
-        # linear_axis_count = 0
-        # angular_axis_count = 0
-        # if (joint_type == JOINT_PRISMATIC):
-        #     dof_count = 1
-        #     coord_count = 1
-        #     linear_axis_count = 1
-        #     pos_limit = np.concatenate((axis*joint_limit_lower, axis*joint_limit_upper))
-        # elif (joint_type == JOINT_REVOLUTE):
-        #     dof_count = 1
-        #     coord_count = 1
-        #     angular_axis_count = 1
-        #     ang_limit = np.concatenate((axis*joint_limit_lower, axis*joint_limit_upper))
-        # elif (joint_type == JOINT_BALL):
-        #     dof_count = 3
-        #     coord_count = 4
-        # elif (joint_type == JOINT_FREE):
-        #     dof_count = 6
-        #     coord_count = 7
-        # elif (joint_type == JOINT_FIXED):
-        #     dof_count = 0
-        #     coord_count = 0
-        # elif (joint_type == JOINT_UNIVERSAL):
-        #     dof_count = 2
-        #     coord_count = 2
-        #     angular_axis_count = 2
-        #     q_off = wp.transform_get_rotation(joint_xform_child)
-        #     mat = wp.quat_to_matrix(q_off)
-        #     axis_0 = wp.vec3(mat[0, 0], mat[1, 0], mat[2, 0])
-        #     axis_1 = wp.vec3(mat[0, 1], mat[1, 1], mat[2, 1])
-        #     lower_0 = quat_dof_limit(joint_limit_lower)
-        #     upper_0 = quat_dof_limit(joint_limit_upper)
-        #     lower_1 = quat_dof_limit(joint_limit_lower)
-        #     upper_1 = quat_dof_limit(joint_limit_upper)
-        #     # find dof limits while considering negative axis dimensions and joint limits
-        #     lo0 = axis_0 * lower_0
-        #     up0 = axis_0 * upper_0
-        #     lo1 = axis_1 * lower_1
-        #     up1 = axis_1 * upper_1
-        #     lower_ang_limits = wp.vec3(
-        #         min(min(lo0[0], up0[0]), min(lo1[0], up1[0])),
-        #         min(min(lo0[1], up0[1]), min(lo1[1], up1[1])), 
-        #         min(min(lo0[2], up0[2]), min(lo1[2], up1[2])))
-        #     upper_ang_limits = wp.vec3(
-        #         max(max(lo0[0], up0[0]), max(lo1[0], up1[0])),
-        #         max(max(lo0[1], up0[1]), max(lo1[1], up1[1])), 
-        #         max(max(lo0[2], up0[2]), max(lo1[2], up1[2])))
-        #     ang_limit = np.concatenate((lower_ang_limits, upper_ang_limits))
-        # elif (joint_type == JOINT_COMPOUND):
-        #     dof_count = 3
-        #     coord_count = 3
-        #     angular_axis_count = 3
-        #     q_off = wp.transform_get_rotation(joint_xform_child)
-        #     mat = wp.quat_to_matrix(q_off)
-        #     axis_0 = wp.vec3(mat[0, 0], mat[1, 0], mat[2, 0])
-        #     axis_1 = wp.vec3(mat[0, 1], mat[1, 1], mat[2, 1])
-        #     axis_2 = wp.vec3(mat[0, 2], mat[1, 2], mat[2, 2])
-            
-        #     lower_0 = quat_dof_limit(joint_limit_lower)
-        #     upper_0 = quat_dof_limit(joint_limit_upper)
-        #     lower_1 = quat_dof_limit(joint_limit_lower)
-        #     upper_1 = quat_dof_limit(joint_limit_upper)
-        #     lower_2 = quat_dof_limit(joint_limit_lower)
-        #     upper_2 = quat_dof_limit(joint_limit_upper)
-
-        #     # find dof limits while considering negative axis dimensions and joint limits
-        #     lo0 = axis_0 * lower_0
-        #     up0 = axis_0 * upper_0
-        #     lo1 = axis_1 * lower_1
-        #     up1 = axis_1 * upper_1
-        #     lo2 = axis_2 * lower_2
-        #     up2 = axis_2 * upper_2
-        #     lower_ang_limits = wp.vec3(
-        #         min(min(min(lo0[0], up0[0]), min(lo1[0], up1[0])), min(lo2[0], up2[0])),
-        #         min(min(min(lo0[1], up0[1]), min(lo1[1], up1[1])), min(lo2[1], up2[1])), 
-        #         min(min(min(lo0[2], up0[2]), min(lo1[2], up1[2])), min(lo2[2], up2[2])))
-        #     upper_ang_limits = wp.vec3(
-        #         max(max(max(lo0[0], up0[0]), max(lo1[0], up1[0])), max(lo2[0], up2[0])),
-        #         max(max(max(lo0[1], up0[1]), max(lo1[1], up1[1])), max(lo2[1], up2[1])), 
-        #         max(max(max(lo0[2], up0[2]), max(lo1[2], up1[2])), max(lo2[2], up2[2])))
-        #     ang_limit = np.concatenate((lower_ang_limits, upper_ang_limits))
-        # elif (joint_type == JOINT_DISTANCE):
-        #     dof_count = 1
-        #     coord_count = 1
-        # elif (joint_type == JOINT_D6):
-        #     if joint_d6_settings is None:
-        #         joint_d6_settings = JointD6Settings()
-        #     linear_axis_count = joint_d6_settings.linear_axis_count
-        #     angular_axis_count = joint_d6_settings.angular_axis_count
-        #     dof_count = linear_axis_count + angular_axis_count
-        #     coord_count = linear_axis_count + angular_axis_count
-
-        # # convert coefficients to np.arrays() so we can index into them for 
-        # # compound joints, this just allows user to pass scalars or arrays
-        # # coefficients will be automatically padded to number of dofs
-        # joint_target_ke = np.resize(np.atleast_1d(joint_target_ke), dof_count)
-        # joint_target_kd = np.resize(np.atleast_1d(joint_target_kd), dof_count)
-        # joint_limit_ke = np.resize(np.atleast_1d(joint_limit_ke), dof_count)
-        # joint_limit_kd = np.resize(np.atleast_1d(joint_limit_kd), dof_count)
-        # joint_limit_lower = np.resize(np.atleast_1d(joint_limit_lower), dof_count)
-        # joint_limit_upper = np.resize(np.atleast_1d(joint_limit_upper), dof_count)
-        # joint_twist_lower = np.resize(np.atleast_1d(joint_twist_lower), dof_count)
-        # joint_twist_upper = np.resize(np.atleast_1d(joint_twist_upper), dof_count)
-        # if joint_target is not None:
-        #     joint_target = np.resize(np.atleast_1d(joint_target), dof_count)
-       
-        # for i in range(coord_count):
-        #     self.joint_q.append(0.0)
-
-        
-        # if (joint_type == JOINT_D6):
-        #     pass
-        # else:
-        #     for i in range(dof_count):
-        #         self.joint_qd.append(0.0)
-        #         self.joint_act.append(0.0)
-        #         self.joint_limit_lower.append(joint_limit_lower[i])
-        #         self.joint_limit_upper.append(joint_limit_upper[i])
-        #         self.joint_limit_ke.append(joint_limit_ke[i])
-        #         self.joint_limit_kd.append(joint_limit_kd[i])
-        #         self.joint_twist_lower.append(joint_twist_lower[i])
-        #         self.joint_twist_upper.append(joint_twist_upper[i])
-        #         self.joint_target_ke.append(joint_target_ke[i])
-        #         self.joint_target_kd.append(joint_target_kd[i])
-        #         if joint_target is not None:
-        #             self.joint_target.append(joint_target[i])
-        #         else:
-        #             if joint_limit_lower[i] > 0.0 or joint_limit_upper[i] < 0.0:
-        #                 self.joint_target.append(0.5 * (joint_limit_lower[i] + joint_limit_upper[i]))
-        #             else:
-        #                 self.joint_target.append(0.0)
-        # if (joint_type == JOINT_FREE):
-        #     # ensure that a valid quaternion is used for the free joint angular dofs
-        #     self.joint_q[-1] = 1.0
-            
-        # self.joint_linear_compliance.append(joint_linear_compliance)
-        # self.joint_angular_compliance.append(joint_angular_compliance)
-
-        # self.joint_q_start.append(self.joint_coord_count)
-        # self.joint_qd_start.append(self.joint_dof_count)
-
-        # self.joint_count += 1
-        # self.joint_dof_count += dof_count
-        # self.joint_coord_count += coord_count
-
-        # return index of child body / joint
-        return child
+        self.body_name.append(name or f"body {body_id}")
+        self.body_shapes[body_id] = []
+        return body_id
 
     def add_joint(
         self,
@@ -1319,11 +1137,11 @@ class ModelBuilder:
         def quat_dof_limit(limit: float) -> float:
             # axis-angle space
             return limit
-            # we cannot handle joint limits outside of [-2pi, 2pi]
-            if wp.abs(limit) > 2*np.pi:
-                return limit
-            else:
-                return wp.sin(0.5 * limit)
+            # # quaternion space
+            # if wp.abs(limit) > 2*np.pi:
+            #     return limit
+            # else:
+            #     return wp.sin(0.5 * limit)
 
         self.joint_type.append(joint_type.val)
         self.joint_parent.append(parent)
@@ -1336,7 +1154,7 @@ class ModelBuilder:
         self.joint_X_c.append([*child_xform])
         self.joint_name.append(name or f"joint {self.joint_count}")
         self.joint_axis_start.append(len(self.joint_axis))
-        self.joint_axis_count.append((len(linear_axes), len(angular_axes)))
+        self.joint_axis_dim.append((len(linear_axes), len(angular_axes)))
         self.joint_axis_total_count += len(linear_axes) + len(angular_axes)
             
         self.joint_linear_compliance.append(linear_compliance)
@@ -1350,8 +1168,8 @@ class ModelBuilder:
             joint_lower_pos_limits = np.ones(3) * 1e4
             joint_upper_pos_limits = np.ones(3) * -1e4
             for dim in linear_axes:
-                lo = dim.axis * dim.lower_limit
-                up = dim.axis * dim.upper_limit
+                lo = dim.axis * dim.limit_lower
+                up = dim.axis * dim.limit_upper
                 lo, up = np.minimum(lo, up), np.maximum(lo, up)
                 joint_lower_pos_limits = np.minimum(joint_lower_pos_limits, lo)
                 joint_upper_pos_limits = np.maximum(joint_upper_pos_limits, up)
@@ -1362,8 +1180,8 @@ class ModelBuilder:
                 self.joint_target_kd.append(dim.target_kd)
                 self.joint_limit_ke.append(dim.limit_ke)
                 self.joint_limit_kd.append(dim.limit_kd)
-                self.joint_limit_lower.append(dim.lower_limit)
-                self.joint_limit_upper.append(dim.upper_limit)
+                self.joint_limit_lower.append(dim.limit_lower)
+                self.joint_limit_upper.append(dim.limit_upper)
         if len(angular_axes) == 0:
             joint_lower_ang_limits = np.zeros(3)
             joint_upper_ang_limits = np.zeros(3)
@@ -1371,8 +1189,8 @@ class ModelBuilder:
             joint_lower_ang_limits = np.ones(3) * 2*np.pi
             joint_upper_ang_limits = np.ones(3) * -2*np.pi
             for dim in angular_axes:
-                lo = dim.axis * quat_dof_limit(dim.lower_limit)
-                up = dim.axis * quat_dof_limit(dim.upper_limit)
+                lo = dim.axis * quat_dof_limit(dim.limit_lower)
+                up = dim.axis * quat_dof_limit(dim.limit_upper)
                 lo, up = np.minimum(lo, up), np.maximum(lo, up)
                 joint_lower_ang_limits = np.minimum(joint_lower_ang_limits, lo)
                 joint_upper_ang_limits = np.maximum(joint_upper_ang_limits, up)
@@ -1383,8 +1201,8 @@ class ModelBuilder:
                 self.joint_target_kd.append(dim.target_kd)
                 self.joint_limit_ke.append(dim.limit_ke)
                 self.joint_limit_kd.append(dim.limit_kd)
-                self.joint_limit_lower.append(dim.lower_limit)
-                self.joint_limit_upper.append(dim.upper_limit)
+                self.joint_limit_lower.append(dim.limit_lower)
+                self.joint_limit_upper.append(dim.limit_upper)
         self.joint_lower_pos_limits.append(joint_lower_pos_limits)
         self.joint_upper_pos_limits.append(joint_upper_pos_limits)
         self.joint_lower_ang_limits.append(joint_lower_ang_limits)
@@ -1412,7 +1230,7 @@ class ModelBuilder:
             dof_count = 3
             coord_count = 3
         elif (joint_type == JOINT_DISTANCE):
-            # TODO use free joint dofs?
+            # todo use free joint dofs?
             dof_count = 0
             coord_count = 0
         elif (joint_type == JOINT_D6):
@@ -1432,7 +1250,6 @@ class ModelBuilder:
         self.joint_q_start.append(self.joint_coord_count)
         self.joint_qd_start.append(self.joint_dof_count)
 
-        self.joint_count += 1
         self.joint_dof_count += dof_count
         self.joint_coord_count += coord_count
 
@@ -1490,7 +1307,7 @@ class ModelBuilder:
         """
         ax = JointAxis(
             axis=axis,
-            lower_limit=limit_lower, upper_limit=limit_upper,
+            limit_lower=limit_lower, limit_upper=limit_upper,
             target=target, target_ke=target_ke, target_kd=target_kd, mode=mode,
             limit_ke=limit_ke, limit_kd=limit_kd
         )
@@ -1550,7 +1367,7 @@ class ModelBuilder:
         """
         ax = JointAxis(
             axis=axis,
-            lower_limit=limit_lower, upper_limit=limit_upper,
+            limit_lower=limit_lower, limit_upper=limit_upper,
             target=target, target_ke=target_ke, target_kd=target_kd, mode=mode,
             limit_ke=limit_ke, limit_kd=limit_kd
         )
@@ -1696,13 +1513,92 @@ class ModelBuilder:
         """
         ax = JointAxis(
             axis=(1.0, 0.0, 0.0),
-            lower_limit=min_distance, upper_limit=max_distance,
+            limit_lower=min_distance, limit_upper=max_distance,
         )
         return self.add_joint(
             JOINT_DISTANCE, parent, child,
             parent_xform=parent_xform, child_xform=child_xform,
             linear_axes=[ax],
             linear_compliance=compliance,
+            collision_filter_parent=collision_filter_parent,
+            enabled=enabled)
+
+    def add_joint_universal(
+        self,
+        parent: int,
+        child: int,
+        axis_0: JointAxis,
+        axis_1: JointAxis,
+        parent_xform: wp.transform = wp.transform(),
+        child_xform: wp.transform = wp.transform(),
+        linear_compliance: float = 0.0,
+        angular_compliance: float = 0.0,
+        name: str = None,
+        collision_filter_parent: bool = True,
+        enabled: bool = True) -> int:
+        """Adds a universal joint to the model
+
+        Args:
+            parent: The index of the parent body
+            child: The index of the child body
+            axis_0: The first axis of the joint
+            axis_1: The second axis of the joint
+            parent_xform: The transform of the joint in the parent body's local frame
+            xform: The transform of the joint in the child body's local frame
+            linear_compliance: The linear compliance of the joint
+            angular_compliance: The angular compliance of the joint
+            name: The name of the joint
+            collision_filter_parent: Whether to filter collisions between shapes of the parent and child bodies
+            enabled: Whether the joint is enabled
+
+        Returns:
+            The index of the child body
+
+        """
+        return self.add_joint(
+            JOINT_UNIVERSAL, parent, child,
+            angular_axes=[axis_0, axis_1],
+            parent_xform=parent_xform, child_xform=child_xform,
+            linear_compliance=linear_compliance, angular_compliance=angular_compliance,
+            name=name,
+            collision_filter_parent=collision_filter_parent,
+            enabled=enabled)
+
+    def add_joint_compound(
+        self,
+        parent: int,
+        child: int,
+        axis_0: JointAxis,
+        axis_1: JointAxis,
+        axis_2: JointAxis,
+        parent_xform: wp.transform = wp.transform(),
+        child_xform: wp.transform = wp.transform(),
+        name: str = None,
+        collision_filter_parent: bool = True,
+        enabled: bool = True) -> int:
+        """Adds a compound joint to the model
+
+        Args:
+            parent: The index of the parent body
+            child: The index of the child body
+            axis_0: The first axis of the joint
+            axis_1: The second axis of the joint
+            axis_2: The third axis of the joint
+            parent_xform: The transform of the joint in the parent body's local frame
+            xform: The transform of the joint in the child body's local frame
+            name: The name of the joint
+            collision_filter_parent: Whether to filter collisions between shapes of the parent and child bodies
+            enabled: Whether the joint is enabled
+
+        Returns:
+            The index of the child body
+
+        """
+        return self.add_joint(
+            JOINT_COMPOUND, parent, child,
+            angular_axes=[axis_0, axis_1, axis_2],
+            parent_xform=parent_xform, child_xform=child_xform,
+            name=name,
             collision_filter_parent=collision_filter_parent,
             enabled=enabled)
 
@@ -1957,49 +1853,6 @@ class ModelBuilder:
 
         return self._add_shape(body, pos, rot, GEO_MESH, (scale[0], scale[1], scale[2], 0.0), mesh, density, ke, kd, kf, mu, restitution, thickness=contact_thickness)
 
-    def add_shape_lbs(self,
-                      body: int,
-                      lbs_weights,
-                      lbs_G,
-                      lbs_rest_shape,
-                      pos: Vec3=(0.0, 0.0, 0.0),
-                      rot: Quat=(0.0, 0.0, 0.0, 1.0),
-                      mesh: Mesh=None,
-                      scale: Vec3=(1.0, 1.0, 1.0),
-                      density: float=default_shape_density,
-                      ke: float=default_shape_ke,
-                      kd: float=default_shape_kd,
-                      kf: float=default_shape_kf,
-                      mu: float=default_shape_mu,
-                      restitution: float=default_shape_restitution,
-                      contact_thickness: float=0.0):
-        """Adds a linear-blend skinning (LBS) mesh to the body.
-
-        Args:
-            body: The index of the parent body this shape belongs to
-            pos: The location of the shape with respect to the parent frame
-            rot: The rotation of the shape with respect to the parent frame
-            mesh: The mesh object
-            scale: Scale to use for the collider
-            density: The density of the shape
-            ke: The contact elastic stiffness
-            kd: The contact damping stiffness
-            kf: The contact friction stiffness
-            mu: The coefficient of friction
-            restitution: The coefficient of restitution
-            contact_thickness: The thickness of the contact surface around the shape
-
-        """
-
-        shape_id = self._add_shape(body, pos, rot, GEO_MESH, (scale[0], scale[1], scale[2], 0.0), mesh, density, ke, kd, kf, mu, restitution, thickness=contact_thickness, is_lbs_shape=True)
-        
-        self.lbs_weights.append(lbs_weights) # 778x16 
-        self.lbs_G.append(lbs_G)
-        self.lbs_rest_shape.append(lbs_rest_shape)
-        self.lbs_body_ids.add(body)
-
-        return shape_id
-
     def _shape_radius(self, type, scale, src):
         """
         Calculates the squared radius of a sphere that encloses the shape, used for broadphase collision detection.
@@ -2022,7 +1875,7 @@ class ModelBuilder:
         else:
             return 10.0
     
-    def _add_shape(self, body, pos, rot, type, scale, src, density, ke, kd, kf, mu, restitution, thickness=0.0, collision_group=-1, collision_filter_parent=True, has_ground_collision=True, is_lbs_shape=False):
+    def _add_shape(self, body, pos, rot, type, scale, src, density, ke, kd, kf, mu, restitution, thickness=0.0, collision_group=-1, collision_filter_parent=True, has_ground_collision=True):
         self.shape_body.append(body)
         shape = len(self.shape_geo_type)
         if body in self.body_shapes:
@@ -2049,7 +1902,6 @@ class ModelBuilder:
         self.shape_collision_group_map[collision_group].append(shape)
         self.shape_collision_radius.append(self._shape_radius(type, scale, src))
         if collision_filter_parent and body > -1 and body in self.joint_parents:
-            # XXX we assume joint ID == body ID here
             for parent_body in self.joint_parents[body]:
                 if parent_body > -1:
                     for parent_shape in self.body_shapes[parent_body]:
@@ -2057,8 +1909,6 @@ class ModelBuilder:
         if body == -1:
             has_ground_collision = False
         self.shape_ground_collision.append(has_ground_collision)
-
-        self.shape_is_lbs.append(is_lbs_shape)
 
         (m, I) = self._compute_shape_mass(type, scale, src, density)
 
@@ -2996,6 +2846,7 @@ class ModelBuilder:
 
     def set_ground_plane(self,
                          normal=None,
+                         offset=0.0,
                          ke: float=default_shape_ke,
                          kd: float=default_shape_kd,
                          kf: float=default_shape_kf,
@@ -3008,7 +2859,7 @@ class ModelBuilder:
         if normal is None:
             normal = self.upvector
         self._ground_params = dict(
-            plane=(*normal, 0.0),
+            plane=(*normal, offset),
             width=0.0,
             length=0.0,
             ke=ke,
@@ -3018,13 +2869,11 @@ class ModelBuilder:
             restitution=restitution)
 
     def _create_ground_plane(self):
-        self.add_shape_plane(**self._ground_params)
+        ground_id = self.add_shape_plane(**self._ground_params)
         self._ground_created = True
         # disable ground collisions as they will be treated separately
-        ground_id = len(self.shape_geo_type)-1
         for i in range(len(self.shape_geo_type)-1):
             self.shape_collision_filter_pairs.add((i, ground_id))
-
 
     def finalize(self, device=None, requires_grad=False) -> Model:
         """Convert this builder object to a concrete model for simulation.
@@ -3115,8 +2964,6 @@ class ModelBuilder:
             m.shape_collision_radius = wp.array(self.shape_collision_radius, dtype=wp.float32, requires_grad=requires_grad)
             m.shape_ground_collision = self.shape_ground_collision
 
-            m.shape_is_lbs = wp.array(self.shape_is_lbs, dtype=wp.int32, device=device)
-
             #---------------------
             # springs
 
@@ -3161,21 +3008,6 @@ class ModelBuilder:
             m.muscle_bodies = wp.array(self.muscle_bodies, dtype=wp.int32)
             m.muscle_points = wp.array(self.muscle_points, dtype=wp.vec3, requires_grad=requires_grad)
             m.muscle_activation = wp.array(self.muscle_activation, dtype=wp.float32, requires_grad=requires_grad)
-
-            #-----------------------
-            # LBS
-            if len(self.lbs_G) > 0:
-                m.lbs_link_count = self.lbs_weights[0].shape[1]
-                # m.lbs_faces = wp.array(self.lbs_faces[0], dtype=wp.int32)
-                # m.lbs_verts = wp.array(self.lbs_verts[0], dtype=wp.vec3, requires_grad=requires_grad)
-
-                m.lbs_weights = wp.array(self.lbs_weights[0], dtype=wp.float32, requires_grad=requires_grad)
-                m.lbs_G = wp.array(self.lbs_G[0], dtype=wp.mat44, requires_grad=requires_grad)
-                m.lbs_rest_shape = wp.array(self.lbs_rest_shape[0], dtype=wp.vec4, requires_grad=requires_grad)
-                # m.lbs_scale = self.lbs_scale[0]
-                # m.lbs_base_transform = self.lbs_base_transform[0]
-                # print(self.lbs_weights[0].shape)
-                # print(m.lbs_weights.numpy().shape)
             
             #--------------------------------------
             # rigid bodies
@@ -3197,7 +3029,7 @@ class ModelBuilder:
             m.joint_X_p = wp.array(self.joint_X_p, dtype=wp.transform, requires_grad=requires_grad)
             m.joint_X_c = wp.array(self.joint_X_c, dtype=wp.transform, requires_grad=requires_grad)
             m.joint_axis_start = wp.array(self.joint_axis_start, dtype=wp.int32)
-            m.joint_axis_count = wp.array(np.array(self.joint_axis_count), dtype=wp.int32, ndim=2)
+            m.joint_axis_dim = wp.array(np.array(self.joint_axis_dim), dtype=wp.int32, ndim=2)
             m.joint_axis = wp.array(self.joint_axis, dtype=wp.vec3, requires_grad=requires_grad)
             m.joint_q = wp.array(self.joint_q, dtype=wp.float32, requires_grad=requires_grad)
             m.joint_qd = wp.array(self.joint_qd, dtype=wp.float32, requires_grad=requires_grad)
@@ -3222,10 +3054,6 @@ class ModelBuilder:
 
             m.joint_pos_limit = wp.array(np.hstack((self.joint_upper_pos_limits, self.joint_lower_pos_limits)), dtype=wp.spatial_vector, requires_grad=requires_grad)
             m.joint_ang_limit = wp.array(np.hstack((self.joint_upper_ang_limits, self.joint_lower_ang_limits)), dtype=wp.spatial_vector, requires_grad=requires_grad)
-            print("joint_pos_limit")
-            print(m.joint_pos_limit.numpy())
-            print("joint_ang_limit")
-            print(m.joint_ang_limit.numpy())
 
             # 'close' the start index arrays with a sentinel value
             joint_q_start = copy.copy(self.joint_q_start)
