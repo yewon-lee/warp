@@ -1110,8 +1110,13 @@ def handle_contact_pairs(
 
     elif (geo_type_a == wp.sim.GEO_MESH and geo_type_b == wp.sim.GEO_BOX):
         # vertex-based contact
-        mesh = wp.mesh_get(shape_geo_id[shape_a])
-        body_a_pos = mesh.points[point_id] * geo_scale_a[0]
+        # p = wp.mesh_get_point(shape_geo_id[shape_a], point_id)
+        # p = mesh.points[point_id]
+        # wp.printf("point_id: %d, mesh.points: %i,  point: %.4f %.4f %.4f\n", point_id, mesh.points.shape[0], p[0], p[1], p[2])
+        
+        # mesh = wp.mesh_get(shape_geo_id[shape_a])
+        # body_a_pos = mesh.points[point_id] * geo_scale_a[0]
+        body_a_pos = wp.mesh_get_point(shape_geo_id[shape_a], point_id) * geo_scale_a[0]
         p_a_world = wp.transform_point(X_ws_a, body_a_pos)
         # find closest point + contact normal on box B
         query_b = wp.transform_point(X_sw_b, p_a_world)
@@ -1161,7 +1166,8 @@ def handle_contact_pairs(
         mesh = wp.mesh_get(shape_geo_id[shape_a])
         mesh_b = shape_geo_id[shape_b]
 
-        body_a_pos = mesh.points[point_id] * geo_scale_a[0]
+        # body_a_pos = mesh.points[point_id] * geo_scale_a[0]
+        body_a_pos = wp.mesh_get_point(shape_geo_id[shape_a], point_id) * geo_scale_a[0]
         p_a_world = wp.transform_point(X_ws_a, body_a_pos)
         query_b_local = wp.transform_point(X_sw_b, p_a_world)
 
