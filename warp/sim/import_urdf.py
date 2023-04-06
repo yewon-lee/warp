@@ -13,14 +13,12 @@ except:
 
 import math
 import numpy as np
-import os
-import xml.etree.ElementTree as ET
 
 import warp as wp
 from warp.sim.model import Mesh
 
 
-def urdf_add_collision(builder, link, collisions, density, shape_ke, shape_kd, shape_kf, shape_mu, shape_restitution, thickness):
+def urdf_add_collision(builder, link, collisions, density, shape_ke, shape_kd, shape_kf, shape_mu, shape_restitution, shape_thickness):
 
     # add geometry
     for collision in collisions:
@@ -28,7 +26,7 @@ def urdf_add_collision(builder, link, collisions, density, shape_ke, shape_kd, s
         origin = urdfpy.matrix_to_xyz_rpy(collision.origin)
 
         pos = origin[0:3]
-        rot = wp.quat_rpy(*origin[3:6])
+        rot = wp.quatf(*wp.quat_rpy(*origin[3:6]))
 
         geo = collision.geometry
 
@@ -46,7 +44,7 @@ def urdf_add_collision(builder, link, collisions, density, shape_ke, shape_kd, s
                 kf=shape_kf,
                 mu=shape_mu,
                 restitution=shape_restitution,
-                contact_thickness=thickness)
+                thickness=shape_thickness)
 
         if geo.sphere:
             builder.add_shape_sphere(
@@ -59,25 +57,27 @@ def urdf_add_collision(builder, link, collisions, density, shape_ke, shape_kd, s
                 kd=shape_kd,
                 kf=shape_kf,
                 mu=shape_mu,
-                restitution=shape_restitution)
+                restitution=shape_restitution,
+                thickness=shape_thickness)
 
         if geo.cylinder:
 
-            # cylinders in URDF are aligned with z-axis, while Warp uses x-axis
-            r = wp.quat_from_axis_angle((0.0, 1.0, 0.0), math.pi*0.5)
+            # cylinders in URDF are aligned with z-axis, while Warp uses y-axis
+            r = wp.quat_from_axis_angle((1.0, 0.0, 0.0), math.pi*0.5)
 
             builder.add_shape_capsule(
                 body=link,
                 pos=pos,
                 rot=wp.mul(rot, r),
                 radius=geo.cylinder.radius,
-                half_width=geo.cylinder.length*0.5,
+                half_height=geo.cylinder.length*0.5,
                 density=density,
                 ke=shape_ke,
                 kd=shape_kd,
                 kf=shape_kf,
                 mu=shape_mu,
-                restitution=shape_restitution)
+                restitution=shape_restitution,
+                thickness=shape_thickness)
 
         if geo.mesh:
 
@@ -98,7 +98,7 @@ def urdf_add_collision(builder, link, collisions, density, shape_ke, shape_kd, s
                     kf=shape_kf,
                     mu=shape_mu,
                     restitution=shape_restitution,
-                    contact_thickness=thickness)
+                    thickness=shape_thickness)
 
 def parse_urdf(
         filename,
