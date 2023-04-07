@@ -6,7 +6,7 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 ###########################################################################
-# Example Sim Ant
+# Ant environment
 #
 # Shows how to set up a simulation of a rigid-body Ant articulation based on
 # the OpenAI gym environment using the wp.sim.ModelBuilder() and MCJF
@@ -17,34 +17,29 @@
 import os
 import math
 
-import numpy as np
-
 import warp as wp
 import warp.sim
-import warp.sim.render
-import warp.sim.tiny_render
 
-from sim_demo import WarpSimDemonstration, run_demo, IntegratorType
+from environment import Environment, run_env, IntegratorType
 
-wp.init()
-
-class Demo(WarpSimDemonstration):
-    sim_name = "example_sim_ant"
-    env_offset=(6.0, 0.0, 6.0)
+class AntEnvironment(Environment):
+    sim_name = "env_ant"
+    env_offset=(2.5, 0.0, 2.5)
     tiny_render_settings = dict(scaling=3.0)
     usd_render_settings = dict(scaling=100.0)
 
     sim_substeps_euler = 32
     sim_substeps_xpbd = 3
 
-    integrator_type = IntegratorType.EULER
-
     joint_attach_ke: float = 100000.0
     joint_attach_kd: float = 10.0
 
+    use_graph_capture = True
+    use_tiled_rendering = True
+
     def create_articulation(self, builder):
         wp.sim.parse_mjcf(
-            os.path.join(os.path.dirname(__file__), "assets/nv_ant.xml"),
+            os.path.join(os.path.dirname(__file__), "../assets/nv_ant.xml"),
             builder,
             stiffness=0.0,
             damping=1.0,
@@ -58,7 +53,7 @@ class Demo(WarpSimDemonstration):
             enable_self_collisions=False)
         builder.joint_q[7:] = [0.0, 1.0, 0.0, -1.0, 0.0, -1.0, 0.0, 1.0]
         builder.joint_q[:7] = [0.0, 0.7, 0.0, *wp.quat_from_axis_angle((1.0, 0.0, 0.0), -math.pi*0.5)]
-        # builder.joint_enabled[0] = False
+
 
 if __name__ == "__main__":
-    run_demo(Demo)
+    run_env(AntEnvironment)

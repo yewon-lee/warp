@@ -6,7 +6,7 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 ###########################################################################
-# Example Sim Humanoid
+# Humanoid environment
 #
 # Shows how to set up a simulation of a rigid-body Humanoid articulation based
 # on the OpenAI gym environment using the wp.sim.ModelBuilder() and MCJF
@@ -19,11 +19,11 @@ import math
 import warp as wp
 import warp.sim
 
-from sim_demo import WarpSimDemonstration, run_demo, IntegratorType
+from environment import Environment, run_env
 
-class Demo(WarpSimDemonstration):
-    sim_name = "example_sim_humanoid"
-    env_offset=(6.0, 0.0, 6.0)
+class HumanoidEnvironment(Environment):
+    sim_name = "env_humanoid"
+    env_offset=(2.0, 0.0, 2.0)
     tiny_render_settings = dict(scaling=3.0)
     usd_render_settings = dict(scaling=100.0)
 
@@ -38,11 +38,11 @@ class Demo(WarpSimDemonstration):
         rigid_contact_con_weighting=True,
     )
 
-    # integrator_type = IntegratorType.EULER
+    use_tiled_rendering = False
 
     def create_articulation(self, builder):
         wp.sim.parse_mjcf(
-            os.path.join(os.path.dirname(__file__), "assets/nv_humanoid.xml"),
+            os.path.join(os.path.dirname(__file__), "../assets/nv_humanoid.xml"),
             builder,
             stiffness=0.0,
             damping=0.1,
@@ -59,5 +59,6 @@ class Demo(WarpSimDemonstration):
 
         builder.joint_q[:7] = [0.0, 1.7, 0.0, *wp.quat_from_axis_angle((1.0, 0.0, 0.0), -math.pi*0.5)]
 
+
 if __name__ == "__main__":
-    run_demo(Demo)
+    run_env(HumanoidEnvironment)
