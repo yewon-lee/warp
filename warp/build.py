@@ -8,7 +8,7 @@
 import math
 import os
 import sys
-import imp
+import importlib
 import subprocess
 import ctypes
 import _ctypes
@@ -77,10 +77,10 @@ def find_host_compiler():
             if not os.path.exists(vswhere_path):
                 return ""
 
-            vs_path = run_cmd('"{}" -latest -property installationPath'.format(vswhere_path)).decode().rstrip()
+            vs_path = run_cmd(f'"{vswhere_path}" -latest -property installationPath').decode().rstrip()
             vsvars_path = os.path.join(vs_path, "VC\\Auxiliary\\Build\\vcvars64.bat")
 
-            output = run_cmd('"{}" && set'.format(vsvars_path)).decode()
+            output = run_cmd(f'"{vsvars_path}" && set').decode()
             
             for line in output.splitlines():
                 pair = line.split("=", 1)
@@ -90,9 +90,9 @@ def find_host_compiler():
             cl_path = run_cmd("where cl.exe").decode("utf-8").rstrip()
             cl_version = os.environ["VCToolsVersion"].split(".")
 
-            # ensure at least VS2017 version, see list of MSVC versions here https://en.wikipedia.org/wiki/Microsoft_Visual_C%2B%2B
+            # ensure at least VS2019 version, see list of MSVC versions here https://en.wikipedia.org/wiki/Microsoft_Visual_C%2B%2B
             cl_required_major = 14
-            cl_required_minor = 1
+            cl_required_minor = 29
 
             if ((int(cl_version[0]) < cl_required_major) or
                 (int(cl_version[0]) == cl_required_major) and int(cl_version[1]) < cl_required_minor):
@@ -113,17 +113,6 @@ def find_host_compiler():
             return run_cmd("which g++").decode()
         except:
             return ""
-
-
-
-
-
-# See PyTorch for reference on how to find nvcc.exe more robustly, https://pytorch.org/docs/stable/_modules/torch/utils/cpp_extension.html#CppExtension
-def find_cuda():
-    
-    # Guess #1
-    cuda_home = os.environ.get('CUDA_HOME') or os.environ.get('CUDA_PATH')
-    return cuda_home
     
 
 def get_cuda_toolkit_version(cuda_home):
@@ -145,7 +134,7 @@ def get_cuda_toolkit_version(cuda_home):
 
 
 # builds cuda source to PTX or CUBIN using NVRTC (output type determined by output_path extension)
-def build_cuda(cu_path, arch, output_path, config="release", force=False, verify_fp=False, fast_math=False):
+def build_cuda(cu_path, arch, output_path, config="release", verify_fp=False, fast_math=False):
 
     src_file = open(cu_path)
     src = src_file.read().encode('utf-8')
@@ -171,22 +160,30 @@ def load_cuda(input_path, device):
 def quote(path):
     return "\"" + path + "\""
 
-def build_dll(cpp_path, cu_path, dll_path, config="release", verify_fp=False, fast_math=False, force=False):
+def build_dll(dll_path, cpp_paths, cu_path, libs=[], mode="release", verify_fp=False, fast_math=False, use_cache=True, quick=False):
 
     cuda_home = warp.config.cuda_path
     cuda_cmd = None
-    cutlass_home = "warp/native/cutlass"
-    cutlass_includes = f'-I"{cutlass_home}/include" -I"{cutlass_home}/tools/util/include"'
+
+    if quick:
+        cutlass_includes = ""
+        cutlass_enabled = "WP_ENABLE_CUTLASS=0"
+    else:
+        cutlass_home = "warp/native/cutlass"
+        cutlass_includes = f'-I"{cutlass_home}/include" -I"{cutlass_home}/tools/util/include"'
+        cutlass_enabled = "WP_ENABLE_CUTLASS=1"
+
+    if quick or cu_path is None:
+        cuda_compat_enabled = "WP_ENABLE_CUDA_COMPATIBILITY=0"
+    else:
+        cuda_compat_enabled = "WP_ENABLE_CUDA_COMPATIBILITY=1"
 
     import pathlib
     warp_home_path = pathlib.Path(__file__).parent
     warp_home = warp_home_path.resolve()
     nanovdb_home = (warp_home_path.parent / "_build/host-deps/nanovdb/include")
-
-    if (cu_path != None and cuda_home == None):
-        print("CUDA toolchain not found, skipping CUDA build")
     
-    if(force == False):
+    if use_cache:
 
         if (os.path.exists(dll_path) == True):
 
@@ -203,7 +200,7 @@ def build_dll(cpp_path, cu_path, dll_path, config="release", verify_fp=False, fa
 
                     cache_valid = False
 
-            if (cpp_path):
+            for cpp_path in cpp_paths:
                 cpp_time = os.path.getmtime(cpp_path)
                 if (cpp_time > dll_time):
                     
@@ -215,7 +212,7 @@ def build_dll(cpp_path, cu_path, dll_path, config="release", verify_fp=False, fa
             if (cache_valid):
                 
                 if (warp.config.verbose):
-                    print("Skipping build of {} since outputs newer than inputs".format(dll_path))
+                    print(f"Skipping build of {dll_path} since outputs newer than inputs")
                 
                 return True
 
@@ -224,54 +221,58 @@ def build_dll(cpp_path, cu_path, dll_path, config="release", verify_fp=False, fa
 
     # output stale, rebuild
     if (warp.config.verbose):
-        print("Building {}".format(dll_path))
+        print(f"Building {dll_path}")
 
     native_dir = os.path.join(warp_home, "native")
 
-    # is the library being built with CUDA enabled?
-    if cuda_home is None or cuda_home == "":
-        cuda_disabled = 1
-    else:
-        cuda_disabled = 0
-
+    if cu_path:
         # check CUDA Toolkit version
         min_ctk_version = (11, 5)
         ctk_version = get_cuda_toolkit_version(cuda_home) or min_ctk_version
         if ctk_version < min_ctk_version:
             raise Exception(f"CUDA Toolkit version {min_ctk_version[0]}.{min_ctk_version[1]}+ is required (found {ctk_version[0]}.{ctk_version[1]} in {cuda_home})")
 
-        # generate code for all supported architectures
-        gencode_opts = [
-            # SASS for supported desktop/datacenter architectures
-            "-gencode=arch=compute_52,code=sm_52",  # Maxwell
-            "-gencode=arch=compute_60,code=sm_60",  # Pascal
-            "-gencode=arch=compute_61,code=sm_61",
-            "-gencode=arch=compute_70,code=sm_70",  # Volta
-            "-gencode=arch=compute_75,code=sm_75",  # Turing
-            "-gencode=arch=compute_80,code=sm_80",  # Ampere
-            "-gencode=arch=compute_86,code=sm_86",
+        gencode_opts = []
 
-            # SASS for supported mobile architectures (e.g. Tegra/Jetson)
-            # "-gencode=arch=compute_53,code=sm_53",
-            # "-gencode=arch=compute_62,code=sm_62",
-            # "-gencode=arch=compute_72,code=sm_72",
-            # "-gencode=arch=compute_87,code=sm_87",
-        ]
-
-        # support for Ada and Hopper is available with CUDA Toolkit 11.8+
-        if ctk_version < (11, 8):
+        if quick:
+            # minimum supported architectures (PTX)
             gencode_opts += [
-                # PTX for future compatibility
-                "-gencode=arch=compute_86,code=compute_86",
+                "-gencode=arch=compute_52,code=compute_52",
+                "-gencode=arch=compute_75,code=compute_75"
             ]
-        else: # ctk_version >= (11, 8)
+        else:
+            # generate code for all supported architectures
             gencode_opts += [
-                "-gencode=arch=compute_89,code=sm_89",  # Ada
-                "-gencode=arch=compute_90,code=sm_90",  # Hopper
-
-                # PTX for future compatibility
-                "-gencode=arch=compute_90,code=compute_90",
+                # SASS for supported desktop/datacenter architectures
+                "-gencode=arch=compute_52,code=sm_52",  # Maxwell
+                "-gencode=arch=compute_60,code=sm_60",  # Pascal
+                "-gencode=arch=compute_61,code=sm_61",
+                "-gencode=arch=compute_70,code=sm_70",  # Volta
+                "-gencode=arch=compute_75,code=sm_75",  # Turing
+                "-gencode=arch=compute_80,code=sm_80",  # Ampere
+                "-gencode=arch=compute_86,code=sm_86",
+                
+                # SASS for supported mobile architectures (e.g. Tegra/Jetson)
+                # "-gencode=arch=compute_53,code=sm_53",
+                # "-gencode=arch=compute_62,code=sm_62",
+                # "-gencode=arch=compute_72,code=sm_72",
+                # "-gencode=arch=compute_87,code=sm_87",
             ]
+
+            # support for Ada and Hopper is available with CUDA Toolkit 11.8+
+            if ctk_version >= (11, 8):
+                gencode_opts += [
+                    "-gencode=arch=compute_89,code=sm_89",  # Ada
+                    "-gencode=arch=compute_90,code=sm_90",  # Hopper
+
+                    # PTX for future hardware
+                    "-gencode=arch=compute_90,code=compute_90",
+                ]
+            else:
+                gencode_opts += [
+                    # PTX for future hardware
+                    "-gencode=arch=compute_86,code=compute_86",
+                ]
 
         nvcc_opts = gencode_opts + [
             "-t0", # multithreaded compilation
@@ -281,32 +282,50 @@ def build_dll(cpp_path, cu_path, dll_path, config="release", verify_fp=False, fa
         if fast_math:
             nvcc_opts.append("--use_fast_math")
 
+    # is the library being built with CUDA enabled?
+    cuda_enabled = "WP_ENABLE_CUDA=1" if (cu_path is not None) else "WP_ENABLE_CUDA=0"
+
     if os.name == 'nt':
 
+        # try loading clang.dll, except when we're building clang.dll or warp.dll
+        clang = None
+        if os.path.basename(dll_path) != "clang.dll" and os.path.basename(dll_path) != "warp.dll":
+            try:
+                clang = warp.build.load_dll(f"{warp_home_path}/bin/clang.dll")
+            except RuntimeError as e:
+                clang = None
+
         if not warp.config.host_compiler:
-            raise RuntimeError("Warp build error: Host compiler was not found")
+            if not clang:
+                raise RuntimeError("Warp build error: No host or bundled compiler was not found")
         
         host_linker = os.path.join(os.path.dirname(warp.config.host_compiler), "link.exe")
 
-        cpp_out = cpp_path + ".obj"
+        cpp_includes = f' /I"{warp_home_path.parent}/external/llvm-project/out/install/{mode}/include"'
+        cuda_includes = f' /I"{cuda_home}/include"' if cu_path else ""
+        includes = cpp_includes + cuda_includes
 
-        if cuda_disabled:
-            cuda_includes = ""
+        # nvrtc_static.lib is built with /MT and _ITERATOR_DEBUG_LEVEL=0 so if we link it in we must match these options
+        if cu_path or mode != "debug":
+            runtime = "/MT"
+            iter_dbg = "_ITERATOR_DEBUG_LEVEL=0"
+            debug = "NDEBUG"
         else:
-            cuda_includes = f' /I"{cuda_home}/include"'
+            runtime = "/MTd"
+            iter_dbg = "_ITERATOR_DEBUG_LEVEL=2"
+            debug = "_DEBUG"
 
-        if (config == "debug"):
-            cpp_flags = f'/MTd /Zi /Od /D "_DEBUG" /D "WP_CPU" /D "WP_DISABLE_CUDA={cuda_disabled}" /D "_ITERATOR_DEBUG_LEVEL=0" /I"{native_dir}" /I"{nanovdb_home}" {cuda_includes}'
-            ld_flags = '/DEBUG /dll'
-            ld_inputs = []
+        if "/NODEFAULTLIB" in libs:
+            runtime = "/sdl- /GS-"  # don't specify a runtime, and disable security checks with depend on it
 
-        elif (config == "release"):
-            cpp_flags = f'/Ox /D "NDEBUG" /D "WP_CPU" /D "WP_DISABLE_CUDA={cuda_disabled}" /D "_ITERATOR_DEBUG_LEVEL=0" /I"{native_dir}" /I"{nanovdb_home}" {cuda_includes}'
-            ld_flags = '/dll'
-            ld_inputs = []
-
+        if (mode == "debug"):
+            cpp_flags = f'/nologo {runtime} /Zi /Od /D "{debug}" /D "WP_CPU" /D "{cuda_enabled}" /D "{cutlass_enabled}" /D "{cuda_compat_enabled}" /D "{iter_dbg}" /I"{native_dir}" /I"{nanovdb_home}" {includes}'
+            linkopts = ["/DLL", "/DEBUG"]
+        elif (mode == "release"):
+            cpp_flags = f'/nologo {runtime} /Ox /D "{debug}" /D "WP_CPU" /D "{cuda_enabled}" /D "{cutlass_enabled}" /D "{cuda_compat_enabled}" /D "{iter_dbg}" /I"{native_dir}" /I"{nanovdb_home}" {includes}'
+            linkopts = ["/DLL"]
         else:
-            raise RuntimeError("Unrecognized build configuration (debug, release), got: {}".format(config))
+            raise RuntimeError(f"Unrecognized build configuration (debug, release), got: {mode}")
 
         if verify_fp:
             cpp_flags += ' /D "WP_VERIFY_FP"'
@@ -314,50 +333,49 @@ def build_dll(cpp_path, cu_path, dll_path, config="release", verify_fp=False, fa
         if fast_math:
             cpp_flags += " /fp:fast"
 
-
         with ScopedTimer("build", active=warp.config.verbose):
-            cpp_cmd = f'"{warp.config.host_compiler}" {cpp_flags} -c "{cpp_path}" /Fo"{cpp_out}"'
-            run_cmd(cpp_cmd)
+            for cpp_path in cpp_paths:
+                cpp_out = cpp_path + ".obj"
+                linkopts.append(quote(cpp_out))
 
-            ld_inputs.append(quote(cpp_out))
+                if clang:
+                    with open(cpp_path, "rb") as cpp:
+                        clang.compile_cpp(cpp.read(), native_dir.encode('utf-8'), cpp_out.encode('utf-8'))
 
-        if cu_path and not cuda_disabled:
+                else:
+                    cpp_cmd = f'"{warp.config.host_compiler}" {cpp_flags} -c "{cpp_path}" /Fo"{cpp_out}"'
+                    run_cmd(cpp_cmd)
+
+        if cu_path:
 
             cu_out = cu_path + ".o"
 
-            if (config == "debug"):
-                cuda_cmd = f'"{cuda_home}/bin/nvcc" --compiler-options=/MTd,/Zi,/Od -g -G -O0 -D_DEBUG -D_ITERATOR_DEBUG_LEVEL=0 -I"{native_dir}" -I"{nanovdb_home}" -line-info {" ".join(nvcc_opts)} -DWP_CUDA {cutlass_includes} -o "{cu_out}" -c "{cu_path}"'
+            if (mode == "debug"):
+                cuda_cmd = f'"{cuda_home}/bin/nvcc" --compiler-options=/MT,/Zi,/Od -g -G -O0 -DNDEBUG -D_ITERATOR_DEBUG_LEVEL=0 -I"{native_dir}" -I"{nanovdb_home}" -line-info {" ".join(nvcc_opts)} -DWP_CUDA -DWP_ENABLE_CUDA=1 -D{cutlass_enabled} {cutlass_includes} -o "{cu_out}" -c "{cu_path}"'
 
-            elif (config == "release"):
-                cuda_cmd = f'"{cuda_home}/bin/nvcc" -O3 {" ".join(nvcc_opts)} -I"{native_dir}" -I"{nanovdb_home}" -DNDEBUG -DWP_CUDA {cutlass_includes} -o "{cu_out}" -c "{cu_path}"'
+            elif (mode == "release"):
+                cuda_cmd = f'"{cuda_home}/bin/nvcc" -O3 {" ".join(nvcc_opts)} -I"{native_dir}" -I"{nanovdb_home}" -DNDEBUG -DWP_CUDA -DWP_ENABLE_CUDA=1 -D{cutlass_enabled} {cutlass_includes} -o "{cu_out}" -c "{cu_path}"'
 
             with ScopedTimer("build_cuda", active=warp.config.verbose):
                 run_cmd(cuda_cmd)
-                ld_inputs.append(quote(cu_out))
-                ld_inputs.append("cudart_static.lib nvrtc_static.lib nvrtc-builtins_static.lib nvptxcompiler_static.lib ws2_32.lib user32.lib /LIBPATH:{}/lib/x64".format(quote(cuda_home)))
+                linkopts.append(quote(cu_out))
+                linkopts.append(f'cudart_static.lib nvrtc_static.lib nvrtc-builtins_static.lib nvptxcompiler_static.lib ws2_32.lib user32.lib /LIBPATH:"{cuda_home}/lib/x64"')
 
         with ScopedTimer("link", active=warp.config.verbose):
-            link_cmd = f'"{host_linker}" {" ".join(ld_inputs)} {ld_flags} /out:"{dll_path}"'
-            run_cmd(link_cmd)
-        
+            # Link into a DLL, unless we have LLVM to load the object code directly
+            if not clang:
+                link_cmd = f'"{host_linker}" {" ".join(linkopts + libs)} /out:"{dll_path}"'
+                run_cmd(link_cmd)
+
     else:
 
-        cpp_out = cpp_path + ".o"
+        cuda_includes = f' -I"{cuda_home}/include"' if cu_path else ""
 
-        if cuda_disabled:
-            cuda_includes = ""
-        else:
-            cuda_includes = f' -I"{cuda_home}/include"'
+        if (mode == "debug"):
+            cpp_flags = f'-O0 -g -D_DEBUG -DWP_CPU -D{cuda_enabled} -D{cutlass_enabled} -D{cuda_compat_enabled} -fPIC -fvisibility=hidden --std=c++11 -fkeep-inline-functions -I"{native_dir}" {cuda_includes}'
 
-        if (config == "debug"):
-            cpp_flags = f'-O0 -g -D_DEBUG -DWP_CPU -DWP_DISABLE_CUDA={cuda_disabled} -fPIC -fvisibility=hidden --std=c++11 -fkeep-inline-functions -I"{native_dir}" {cuda_includes}'
-            ld_flags = "-D_DEBUG"
-            ld_inputs = []
-
-        if (config == "release"):
-            cpp_flags = f'-O3 -DNDEBUG -DWP_CPU -DWP_DISABLE_CUDA={cuda_disabled} -fPIC -fvisibility=hidden --std=c++11 -I"{native_dir}" {cuda_includes}'
-            ld_flags = "-DNDEBUG"
-            ld_inputs = []
+        if (mode == "release"):
+            cpp_flags = f'-O3 -DNDEBUG -DWP_CPU -D{cuda_enabled} -D{cutlass_enabled} -D{cuda_compat_enabled} -fPIC -fvisibility=hidden --std=c++11 -I"{native_dir}" {cuda_includes}'
 
         if verify_fp:
             cpp_flags += ' -DWP_VERIFY_FP'
@@ -365,27 +383,30 @@ def build_dll(cpp_path, cu_path, dll_path, config="release", verify_fp=False, fa
         if fast_math:
             cpp_flags += ' -ffast-math'
 
+        ld_inputs = []
+
         with ScopedTimer("build", active=warp.config.verbose):
-            build_cmd = f'g++ {cpp_flags} -c "{cpp_path}" -o "{cpp_out}"'
-            run_cmd(build_cmd)
+            for cpp_path in cpp_paths:
+                cpp_out = cpp_path + ".o"
+                build_cmd = f'g++ {cpp_flags} -c "{cpp_path}" -o "{cpp_out}"'
+                run_cmd(build_cmd)
+                ld_inputs.append(quote(cpp_out))
 
-            ld_inputs.append(quote(cpp_out))
-
-        if cu_path and not cuda_disabled:
+        if cu_path:
 
             cu_out = cu_path + ".o"
 
-            if (config == "debug"):
-                cuda_cmd = f'"{cuda_home}/bin/nvcc" -g -G -O0 --compiler-options -fPIC,-fvisibility=hidden -D_DEBUG -D_ITERATOR_DEBUG_LEVEL=0 -line-info {" ".join(nvcc_opts)} -DWP_CUDA {cutlass_includes} -I"{native_dir}" -o "{cu_out}" -c "{cu_path}"'
+            if (mode == "debug"):
+                cuda_cmd = f'"{cuda_home}/bin/nvcc" -g -G -O0 --compiler-options -fPIC,-fvisibility=hidden -D_DEBUG -D_ITERATOR_DEBUG_LEVEL=0 -line-info {" ".join(nvcc_opts)} -DWP_CUDA -DWP_ENABLE_CUDA=1 -I"{native_dir}" -D{cutlass_enabled} {cutlass_includes} -o "{cu_out}" -c "{cu_path}"'
 
-            elif (config == "release"):
-                cuda_cmd = f'"{cuda_home}/bin/nvcc" -O3 --compiler-options -fPIC,-fvisibility=hidden {" ".join(nvcc_opts)} -DNDEBUG -DWP_CUDA {cutlass_includes} -I"{native_dir}" -o "{cu_out}" -c "{cu_path}"'
+            elif (mode == "release"):
+                cuda_cmd = f'"{cuda_home}/bin/nvcc" -O3 --compiler-options -fPIC,-fvisibility=hidden {" ".join(nvcc_opts)} -DNDEBUG -DWP_CUDA -DWP_ENABLE_CUDA=1 -I"{native_dir}" -D{cutlass_enabled} {cutlass_includes} -o "{cu_out}" -c "{cu_path}"'
 
             with ScopedTimer("build_cuda", active=warp.config.verbose):
                 run_cmd(cuda_cmd)
 
                 ld_inputs.append(quote(cu_out))
-                ld_inputs.append('-L"{cuda_home}/lib64" -lcudart_static -lnvrtc_static -lnvrtc-builtins_static -lnvptxcompiler_static -lpthread -ldl -lrt'.format(cuda_home=cuda_home))
+                ld_inputs.append(f'-L"{cuda_home}/lib64" -lcudart_static -lnvrtc_static -lnvrtc-builtins_static -lnvptxcompiler_static -lpthread -ldl -lrt')
 
         if sys.platform == 'darwin':
             opt_no_undefined = "-Wl,-undefined,error"
@@ -395,7 +416,7 @@ def build_dll(cpp_path, cu_path, dll_path, config="release", verify_fp=False, fa
             opt_exclude_libs = "-Wl,--exclude-libs,ALL"
 
         with ScopedTimer("link", active=warp.config.verbose):
-            link_cmd = f"g++ -shared -Wl,-rpath,'$ORIGIN' {opt_no_undefined} {opt_exclude_libs} -o '{dll_path}' {' '.join(ld_inputs)}"
+            link_cmd = f"g++ -shared -Wl,-rpath,'$ORIGIN' {opt_no_undefined} {opt_exclude_libs} -o '{dll_path}' {' '.join(ld_inputs + libs)}"
             run_cmd(link_cmd)
 
     
@@ -407,7 +428,7 @@ def load_dll(dll_path):
         else:
             dll = ctypes.CDLL(dll_path)
     except OSError:
-        raise RuntimeError("Failed to load the shared library '{}'".format(dll_path))
+        raise RuntimeError(f"Failed to load the shared library '{dll_path}'")
     return dll
 
 def unload_dll(dll):
@@ -426,7 +447,7 @@ def unload_dll(dll):
         max_attempts = 100
         for i in range(max_attempts):
             result = ctypes.windll.kernel32.FreeLibrary(ctypes.c_void_p(handle))
-            if result != 0:
+            if result == 0:
                 return
     else:
         _ctypes.dlclose(handle)
