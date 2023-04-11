@@ -12,6 +12,49 @@ import sys
 import numpy as np
 import warp as wp
 
+# default test mode (see get_test_devices())
+#   "basic" - only run on CPU and first GPU device
+#   "unique" - run on CPU and all unique GPU arches
+#   "all" - run on all devices
+test_mode = "basic"
+
+def get_test_devices(mode=None):
+    
+    if mode is None:
+        global test_mode
+        mode = test_mode
+
+    devices = []
+
+    # only run on CPU and first GPU device
+    if mode == "basic":
+        if wp.is_cpu_available():
+            devices.append(wp.get_device("cpu"))
+        if wp.is_cuda_available():
+            devices.append(wp.get_device("cuda:0"))
+    
+    # run on CPU and all unique GPU arches
+    elif mode == "unique":
+
+        if wp.is_cpu_available():
+            devices.append(wp.get_device("cpu"))
+
+        cuda_devices = wp.get_cuda_devices()
+        
+        unique_cuda_devices = {}
+        for d in cuda_devices:
+            if d.arch not in unique_cuda_devices:
+                unique_cuda_devices[d.arch] = d
+
+        devices.extend(list(unique_cuda_devices.values()))
+
+    # run on all devices
+    elif mode == "all":
+        devices = wp.get_devices()
+
+    return devices
+
+
 # redirects and captures all stdout output (including from C-libs)
 class StdOutCapture:
 
@@ -54,7 +97,7 @@ class CheckOutput:
         self.test = test
 
     def __enter__(self):
-        wp.force_load()
+        #wp.force_load()
 
         self.capture = StdOutCapture()
         self.capture.begin()
@@ -67,10 +110,13 @@ class CheckOutput:
 
         s = self.capture.end()
         if (s != ""):
-            print(s)
+            print(s.rstrip())
             
-        # fail if kernel produces any stdout (e.g.: from wp.expect_eq() builtins)
-        self.test.assertEqual(s, "")
+        # fail if test produces unexpected output (e.g.: from wp.expect_eq() builtins)
+        # we allow strings starting of the form "Module xxx load on device xxx"
+        # for lazy loaded modules
+        if s != "" and not s.startswith("Module"):
+            self.test.fail(f"Unexpected output:\n'{s.rstrip()}'")
 
 
 def assert_array_equal(result, expect):
@@ -103,7 +149,8 @@ def create_test_func(func, device, **kwargs):
 
     # pass args to func
     def test_func(self):
-        func(self, device, **kwargs)
+        with CheckOutput(self):
+            func(self, device, **kwargs)
 
     return test_func
 
@@ -130,7 +177,7 @@ def add_function_test(cls, name, func, devices=None, **kwargs):
 
 def add_kernel_test(cls, kernel, dim, name=None, expect=None, inputs=None, devices=None):
     
-    def test_func(self):
+    def test_func(self, device):
 
         args = []
         if (inputs):
@@ -146,20 +193,8 @@ def add_kernel_test(cls, kernel, dim, name=None, expect=None, inputs=None, devic
         # force load so that we don't generate any log output during launch
         kernel.module.load(device)
 
-        capture = StdOutCapture()
-        capture.begin()
-
         with CheckOutput(self):
             wp.launch(kernel, dim=dim, inputs=args, device=device)
-        
-        s = capture.end()
-
-        # fail if kernel produces any stdout (e.g.: from wp.expect_eq() builtins)
-        # we allow strings starting of the form "Module xxx load on device xxx"
-        # for lazy loaded modules
-        if s != "" and s.startswith("Module") == False:
-            self.fail(f"Kernel produced unexpected output: `{s}`")
-
 
         # check output values
         if expect:
@@ -168,9 +203,18 @@ def add_kernel_test(cls, kernel, dim, name=None, expect=None, inputs=None, devic
     if name == None:
         name = kernel.key
 
-    # register test func with class for the given devices
+    # device is required for kernel tests, so use all devices if none were given
     if devices is None:
-        setattr(cls, name, test_func)
-    else:
-        for device in devices:
-            setattr(cls, name + "_" + sanitize_identifier(device), test_func)
+        devices = get_test_devices()
+
+    # register test func with class for the given devices
+    for d in devices:
+        # use a lambda to forward the device to the inner test function
+        test_lambda = lambda test, device=d: test_func(test, device)
+        setattr(cls, name + "_" + sanitize_identifier(d), test_lambda)
+
+# helper that first calls the test function to generate all kernel permuations
+# so that compilation is done in one-shot instead of per-test
+def add_function_test_register_kernel(cls, name, func, devices=None, **kwargs):
+    func( None, None, **kwargs, register_kernels=True )
+    add_function_test(cls, name, func, devices=devices, **kwargs)
