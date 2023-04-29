@@ -7,5 +7,4 @@
 
 from .utils import bourke_color_map
 from .render_usd import UsdRenderer
-from .render_tiny import TinyRenderer
-# from .render_tiny_old import TinyRenderer as TinyRendererOld
+from .render_opengl import OpenGLRenderer

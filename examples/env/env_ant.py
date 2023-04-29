@@ -9,7 +9,7 @@
 # Ant environment
 #
 # Shows how to set up a simulation of a rigid-body Ant articulation based on
-# the OpenAI gym environment using the wp.sim.ModelBuilder() and MCJF
+# the OpenAI gym environment using the Environment class and MCJF
 # importer. Note this example does not include a trained policy.
 #
 ###########################################################################
@@ -20,12 +20,13 @@ import math
 import warp as wp
 import warp.sim
 
-from environment import Environment, run_env, IntegratorType
+from environment import Environment, run_env
+
 
 class AntEnvironment(Environment):
     sim_name = "env_ant"
-    env_offset=(2.5, 0.0, 2.5)
-    tiny_render_settings = dict(scaling=3.0)
+    env_offset = (2.5, 0.0, 2.5)
+    opengl_render_settings = dict(scaling=3.0)
     usd_render_settings = dict(scaling=100.0)
 
     sim_substeps_euler = 32
@@ -44,15 +45,16 @@ class AntEnvironment(Environment):
             stiffness=0.0,
             damping=1.0,
             armature=0.1,
-            contact_ke=1.e+4,
-            contact_kd=1.e+2,
-            contact_kf=1.e+4,
+            contact_ke=1.0e4,
+            contact_kd=1.0e2,
+            contact_kf=1.0e4,
             contact_mu=1.0,
-            limit_ke=1.e+4,
-            limit_kd=1.e+1,
-            enable_self_collisions=False)
+            limit_ke=1.0e4,
+            limit_kd=1.0e1,
+            enable_self_collisions=False,
+        )
         builder.joint_q[7:] = [0.0, 1.0, 0.0, -1.0, 0.0, -1.0, 0.0, 1.0]
-        builder.joint_q[:7] = [0.0, 0.7, 0.0, *wp.quat_from_axis_angle((1.0, 0.0, 0.0), -math.pi*0.5)]
+        builder.joint_q[:7] = [0.0, 0.7, 0.0, *wp.quat_from_axis_angle((1.0, 0.0, 0.0), -math.pi * 0.5)]
 
 
 if __name__ == "__main__":

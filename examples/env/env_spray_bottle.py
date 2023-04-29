@@ -52,4 +52,4 @@ class SprayBottleEnvironment(Environment):
 
 
 if __name__ == "__main__":
-    run_env(CartpoleEnvironment)
+    run_env(SprayBottleEnvironment)

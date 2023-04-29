@@ -25,7 +25,7 @@ from env.environment import Environment, run_env, IntegratorType, RenderMode
 class Demo(Environment):
     sim_name = "example_sim_usd"
     env_offset=(6.0, 0.0, 6.0)
-    tiny_render_settings = dict(scaling=10.0, draw_grid=True)
+    nano_render_settings = dict(scaling=10.0, draw_grid=True)
     usd_render_settings = dict(scaling=100.0)
 
     show_rigid_contact_points = True
@@ -66,8 +66,8 @@ class Demo(Environment):
             # os.path.join(folder, "visual_collision_shape.usda"),
             # os.path.join(folder, "contact_pair_filtering.usd"),
             # os.path.join(folder, "distance_joint.usd"),
-            os.path.join(".usd_cache", "franka_instanceable_20230310135702", "franka_instanceable.usda"),
-            # "http://omniverse-content-staging.s3-us-west-2.amazonaws.com/Assets/Isaac/2022.2.1/Isaac/Robots/Franka/franka_instanceable.usd",
+            # os.path.join(".usd_cache", "franka_instanceable_20230310135702", "franka_instanceable.usda"),
+            "http://omniverse-content-staging.s3-us-west-2.amazonaws.com/Assets/Isaac/2022.2.1/Isaac/Robots/Franka/franka_instanceable.usd",
             # os.path.join(folder, "prismatic_joint.usda"),
             # os.path.join(folder, "revolute_joint.usda"),
             # os.path.join(folder, "d6_joint.usda"),
