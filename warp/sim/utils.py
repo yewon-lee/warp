@@ -63,7 +63,7 @@ def quat_decompose(q: wp.quat):
 @wp.func
 def quat_to_rpy(q: wp.quat):
     """
-    Convert a quaternion into euler angles (roll, pitch, yaw)
+    Convert a quaternion into Euler angles (roll, pitch, yaw)
     roll is rotation around x in radians (counterclockwise)
     pitch is rotation around y in radians (counterclockwise)
     yaw is rotation around z in radians (counterclockwise)
@@ -90,7 +90,7 @@ def quat_to_rpy(q: wp.quat):
 @wp.func
 def quat_to_euler(q: wp.quat, i: int, j: int, k: int) -> wp.vec3:
     """
-    Convert a quaternion into euler angles
+    Convert a quaternion into Euler angles
     i, j, k are the indices in [1,2,3] of the axes to use
     (i != j, j != k)
     """
@@ -125,6 +125,50 @@ def quat_to_euler(q: wp.quat, i: int, j: int, k: int) -> wp.vec3:
         t2 -= PI_2
         t3 *= e
     return wp.vec3(t1, t2, t3)
+
+
+@wp.func
+def quat_from_euler(e: wp.vec3, i: int, j: int, k: int) -> wp.quat:
+    """
+    Convert Euler angles into a quaternion
+    i, j, k are the indices in [1,2,3] of the axes to use
+    (i != j, j != k)
+    """
+    qx = wp.quat(1.0, 0.0, 0.0, e[0])
+    qy = wp.quat(0.0, 1.0, 0.0, e[1])
+    qz = wp.quat(0.0, 0.0, 1.0, e[2])
+    if i == 1:
+        qi = qx
+    elif i == 2:
+        qi = qy
+    else:
+        qi = qz
+    if j == 1:
+        qj = qx
+    elif j == 2:
+        qj = qy
+    else:
+        qj = qz
+    if k == 1:
+        qk = qx
+    elif k == 2:
+        qk = qy
+    else:
+        qk = qz
+    return qi * qj * qk
+
+
+@wp.func
+def quat_between_vectors(a: wp.vec3, b: wp.vec3) -> wp.quat:
+    """
+    Compute the quaternion that rotates vector a to vector b
+    """
+    a = wp.normalize(a)
+    b = wp.normalize(b)
+    c = wp.cross(a, b)
+    d = wp.dot(a, b)
+    q = wp.quat(c[0], c[1], c[2], 1.0 + d)
+    return wp.normalize(q)
 
 
 @wp.func

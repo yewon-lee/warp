@@ -96,6 +96,7 @@ class Environment:
     opengl_render_settings = dict()
     usd_render_settings = dict(scaling=10.0)
     show_rigid_contact_points = False
+    show_joints = False
     # whether OpenGLRenderer should render each environment in a separate tile
     use_tiled_rendering = False
 
@@ -132,6 +133,9 @@ class Environment:
 
     requires_grad: bool = False
 
+    # control-related definitions, to be updated by derived classes
+    control_dim: int = 0
+
     def __init__(self):
         self.parser = argparse.ArgumentParser()
         self.parser.add_argument(
@@ -166,7 +170,7 @@ class Environment:
         elif self.integrator_type == IntegratorType.XPBD:
             self.sim_substeps = self.sim_substeps_xpbd
 
-        self.episode_frames = int(self.episode_duration/self.frame_dt)
+        self.episode_frames = int(self.episode_duration / self.frame_dt)
         self.sim_dt = self.frame_dt / self.sim_substeps
         self.sim_steps = int(self.episode_duration / self.sim_dt)
 
@@ -217,6 +221,7 @@ class Environment:
                 self.sim_name,
                 up_axis=self.up_axis,
                 show_rigid_contact_points=self.show_rigid_contact_points,
+                show_joints=True,
                 **self.opengl_render_settings)
             if self.use_tiled_rendering and self.num_envs > 1:
                 floor_id = self.model.shape_count - 1
@@ -442,20 +447,20 @@ class Environment:
 
             joint_id = 0
             joint_type_names = {
-                wp.sim.JOINT_BALL.val: "ball",
-                wp.sim.JOINT_REVOLUTE.val: "hinge",
-                wp.sim.JOINT_PRISMATIC.val: "slide",
-                wp.sim.JOINT_UNIVERSAL.val: "universal",
-                wp.sim.JOINT_COMPOUND.val: "compound",
-                wp.sim.JOINT_FREE.val: "free",
-                wp.sim.JOINT_FIXED.val: "fixed",
-                wp.sim.JOINT_DISTANCE.val: "distance",
-                wp.sim.JOINT_D6.val: "D6",
+                wp.sim.JOINT_BALL: "ball",
+                wp.sim.JOINT_REVOLUTE: "hinge",
+                wp.sim.JOINT_PRISMATIC: "slide",
+                wp.sim.JOINT_UNIVERSAL: "universal",
+                wp.sim.JOINT_COMPOUND: "compound",
+                wp.sim.JOINT_FREE: "free",
+                wp.sim.JOINT_FIXED: "fixed",
+                wp.sim.JOINT_DISTANCE: "distance",
+                wp.sim.JOINT_D6: "D6",
             }
             joint_lower = self.model.joint_limit_lower.numpy()
             joint_upper = self.model.joint_limit_upper.numpy()
             joint_type = self.model.joint_type.numpy()
-            while joint_id < len(joint_type) - 1 and joint_type[joint_id] == wp.sim.JOINT_FIXED.val:
+            while joint_id < len(joint_type) - 1 and joint_type[joint_id] == wp.sim.JOINT_FIXED:
                 # skip fixed joints
                 joint_id += 1
             q_start = self.model.joint_q_start.numpy()
@@ -468,7 +473,7 @@ class Environment:
                     continue
                 ax.grid()
                 ax.plot(joint_q_history[:, dim])
-                if joint_type[joint_id] != wp.sim.JOINT_FREE.val:
+                if joint_type[joint_id] != wp.sim.JOINT_FREE:
                     lower = joint_lower[qd_i]
                     if abs(lower) < 2 * np.pi:
                         ax.axhline(lower, color="red")

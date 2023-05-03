@@ -14,7 +14,7 @@ from warp.sim.model import Mesh
 def parse_urdf(
         filename,
         builder,
-        xform,
+        xform=wp.transform(),
         floating=False,
         density=1000.0,
         stiffness=100.0,
