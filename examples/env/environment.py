@@ -221,7 +221,7 @@ class Environment:
                 self.sim_name,
                 up_axis=self.up_axis,
                 show_rigid_contact_points=self.show_rigid_contact_points,
-                show_joints=True,
+                show_joints=self.show_joints,
                 **self.opengl_render_settings)
             if self.use_tiled_rendering and self.num_envs > 1:
                 floor_id = self.model.shape_count - 1
@@ -274,13 +274,13 @@ class Environment:
             self.integrator.simulate(self.model, self.state_0, self.state_1, self.sim_dt)
             self.state_0, self.state_1 = self.state_1, self.state_0
 
-    def render(self, is_live=False):
+    def render(self, state=None):
         if self.renderer is not None:
             with wp.ScopedTimer("render", False):
                 self.render_time += self.frame_dt
                 self.renderer.begin_frame(self.render_time)
                 # render state 1 (swapped with state 0 just before)
-                self.renderer.render(self.state_1)
+                self.renderer.render(state or self.state_1)
                 self.renderer.end_frame()
 
     def run(self):
@@ -293,12 +293,14 @@ class Environment:
         self.state_1 = self.model.state()
 
         if self.eval_fk:
-            wp.sim.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, None, self.state_0)
+            # wp.sim.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, None, self.state_0)
+            for _ in range(1):
+                wp.sim.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, None, self.state_0)
 
         self.before_simulate()
 
         if self.renderer is not None:
-            self.render()
+            self.render(self.state_0)
 
             if self.render_mode == RenderMode.OPENGL:
                 self.renderer.paused = True
@@ -330,10 +332,6 @@ class Environment:
 
         # simulate
         with wp.ScopedTimer("simulate", detailed=False, print=False, active=True, dict=profiler):
-            if self.renderer is not None:
-                with wp.ScopedTimer("render", False):
-                    self.render()
-
             running = True
             while running:
                 for f in range(self.episode_frames):

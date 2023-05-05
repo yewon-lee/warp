@@ -6,9 +6,9 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 ###########################################################################
-# Ant environment
+# Hopper environment
 #
-# Shows how to set up a simulation of a rigid-body Ant articulation based on
+# Shows how to set up a simulation of a rigid-body Hopper articulation based on
 # the OpenAI gym environment using the Environment class and MCJF
 # importer. Note this example does not include a trained policy.
 #

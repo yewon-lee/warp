@@ -21,10 +21,11 @@ import warp.sim
 
 from environment import Environment, run_env, IntegratorType
 
+
 class JointTargetEnvironment(Environment):
     sim_name = "env_joint_targets"
-    env_offset=(2.5, 0.0, 2.5)
-    nano_render_settings = dict(scaling=1.0)
+    env_offset = (2.5, 0.0, 2.5)
+    opengl_render_settings = dict(scaling=1.0)
     usd_render_settings = dict(scaling=10.0)
 
     sim_substeps_euler = 32
@@ -52,7 +53,7 @@ class JointTargetEnvironment(Environment):
             parent=-1, child=prismatic_body,
             parent_xform=wp.transform_identity(),
             child_xform=wp.transform_identity(),
-            axis=(1.,0.,0.),
+            axis=(1., 0., 0.),
             mode=wp.sim.JOINT_MODE_TARGET_POSITION,
             limit_lower=-5.0, limit_upper=5.0,
             target=3.1415,  # target position
@@ -69,11 +70,12 @@ class JointTargetEnvironment(Environment):
             parent=prismatic_body, child=revolute_body,
             parent_xform=wp.transform_identity(),
             child_xform=wp.transform_identity(),
-            axis=(0.,0.,1.),
+            axis=(0., 0., 1.),
             mode=wp.sim.JOINT_MODE_TARGET_VELOCITY,
             target=5.0, target_ke=1e3)
         # prevent contacts with the rail capsule again
         builder.shape_collision_filter_pairs.add((shape1, shape3))
+
 
 if __name__ == "__main__":
     run_env(JointTargetEnvironment)

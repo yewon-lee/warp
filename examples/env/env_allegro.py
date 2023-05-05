@@ -8,7 +8,7 @@
 ###########################################################################
 # Example Sim Allegro
 #
-# Shows how to set up a simulation of a rigid-body Allegro hand articulation 
+# Shows how to set up a simulation of a rigid-body Allegro hand articulation
 # from a URDF using the wp.sim.ModelBuilder().
 # Note this example does not include a trained policy.
 #
@@ -22,30 +22,34 @@ import warp.sim
 
 from environment import Environment, run_env, RenderMode
 
+
 class AllegroEnvironment(Environment):
     sim_name = "example_sim_allegro"
-    env_offset=(0.5, 0.0, 0.5)
-    nano_render_settings = dict(scaling=4.0)
+    env_offset = (0.5, 0.0, 0.5)
+    opengl_render_settings = dict(scaling=4.0)
     usd_render_settings = dict(scaling=200.0)
     episode_duration = 8.0
 
     sim_substeps_euler = 64
     sim_substeps_xpbd = 8
 
-    num_envs = 25
+    num_envs = 100
+
+    show_joints = False
 
     xpbd_settings = dict(
-        iterations=10,
-        joint_linear_relaxation=1.0,
-        joint_angular_relaxation=0.45,
-        rigid_contact_relaxation=1.0,
-        rigid_contact_con_weighting=True,
+        iterations=20,
+        # joint_linear_relaxation=1.0,
+        # joint_angular_relaxation=0.45,
+        # rigid_contact_relaxation=1.0,
+        # rigid_contact_con_weighting=True,
     )
 
     use_tiled_rendering = False
+    use_graph_capture = True
 
     # render_mode = RenderMode.USD
-    
+
     def create_articulation(self, builder):
         floating_base = False
         wp.sim.parse_urdf(
@@ -53,7 +57,7 @@ class AllegroEnvironment(Environment):
                 os.path.dirname(__file__),
                 "../assets/isaacgymenvs/kuka_allegro_description/allegro.urdf"),
             builder,
-            xform=wp.transform(np.array((0.0, 0.3, 0.0)), wp.quat_rpy(-np.pi/2, np.pi*0.75, np.pi/2)),
+            xform=wp.transform(np.array((0.0, 0.3, 0.0)), wp.quat_rpy(-np.pi / 2, np.pi * 0.75, np.pi / 2)),
             floating=floating_base,
             density=1e3,
             armature=0.01,
@@ -66,19 +70,20 @@ class AllegroEnvironment(Environment):
             limit_ke=1.e+4,
             limit_kd=1.e+1,
             enable_self_collisions=False)
-        
+
         # ensure all joint positions are within limits
         q_offset = (7 if floating_base else 0)
         qd_offset = (6 if floating_base else 0)
         for i in range(16):
-            builder.joint_q[i+q_offset] = 0.5 * (builder.joint_limit_lower[i+qd_offset] + builder.joint_limit_upper[i+qd_offset])
-            builder.joint_target[i] = builder.joint_q[i+q_offset]
+            builder.joint_q[i + q_offset] = 0.5 * \
+                (builder.joint_limit_lower[i + qd_offset] + builder.joint_limit_upper[i + qd_offset])
+            builder.joint_target[i] = builder.joint_q[i + q_offset]
             builder.joint_target_ke[i] = 5000.0
             builder.joint_target_kd[i] = 1.0
 
         cube_urdf_filename = os.path.join(
-                os.path.dirname(__file__),
-                "../assets/isaacgymenvs/objects/cube_multicolor_allegro.urdf")
+            os.path.dirname(__file__),
+            "../assets/isaacgymenvs/objects/cube_multicolor_allegro.urdf")
         cube_positions = [
             (-0.1, 0.5, 0.0),
             (0.0, 0.05, 0.05),
@@ -107,8 +112,8 @@ class AllegroEnvironment(Environment):
         # apply some motion to the hand
         body_qd = self.state.body_qd.numpy()
         for i in range(self.num_envs):
-            body_qd[i*self.bodies_per_env][2] = 0.4
-            body_qd[i*self.bodies_per_env][1] = 0.2
+            body_qd[i * self.bodies_per_env][2] = 0.4
+            body_qd[i * self.bodies_per_env][1] = 0.2
         self.state.body_qd = wp.array(body_qd, dtype=wp.spatial_vector, device=self.device)
 
 

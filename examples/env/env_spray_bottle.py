@@ -18,25 +18,28 @@ import warp.sim
 
 from environment import Environment, run_env
 
+
 class SprayBottleEnvironment(Environment):
     sim_name = "env_spray_bottle"
-    env_offset=(2.0, 0.0, 2.0)
-    nano_render_settings = dict(scaling=3.0)
+    env_offset = (0.5, 0.0, 0.5)
+    opengl_render_settings = dict(scaling=5.0)
     usd_render_settings = dict(scaling=100.0)
 
     sim_substeps_euler = 32
     sim_substeps_xpbd = 5
-    
-    activate_ground_plane = False
 
-    num_envs = 9
+    activate_ground_plane = True
+
+    num_envs = 100
+
+    show_joints = False
 
     def create_articulation(self, builder):
         wp.sim.parse_urdf(
             os.path.join(os.path.dirname(__file__), "../assets/spray_bottle/mobility.urdf"),
             builder,
-            xform=wp.transform(),
-            floating=False, 
+            xform=wp.transform((0.0, 0.12, 0.0)),
+            floating=True,
             density=0,
             armature=0.1,
             stiffness=0.0,
