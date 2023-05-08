@@ -136,8 +136,8 @@ class Mesh:
             is_solid: If True, the mesh is assumed to be a solid during inertia computation, otherwise it is assumed to be a hollow surface
         """
 
-        self.vertices = vertices
-        self.indices = indices
+        self.vertices = np.array(vertices).reshape(-1, 3)
+        self.indices = np.array(indices, dtype=np.int32).flatten()
         self.is_solid = is_solid
         self.has_inertia = compute_inertia
 
@@ -147,6 +147,12 @@ class Mesh:
             self.I = np.eye(3, dtype=np.float32)
             self.mass = 1.0
             self.com = np.array((0.0, 0.0, 0.0))
+
+    def remesh(self, recompute_inertia=True, **remeshing_kwargs):
+        self.vertices, self.indices = wp.sim.remesh(self.vertices, self.indices.reshape(-1, 3), **remeshing_kwargs)
+        self.indices = self.indices.flatten()
+        if recompute_inertia:
+            self.mass, self.com, self.I, _ = compute_mesh_inertia(1.0, self.vertices, self.indices, is_solid=self.is_solid)
 
     # construct simulation ready buffers from points
     def finalize(self, device=None):
@@ -301,6 +307,7 @@ class Model:
         particle_mass (wp.array): Particle mass, shape [particle_count], float
         particle_inv_mass (wp.array): Particle inverse mass, shape [particle_count], float
         particle_radius (wp.array): Particle radius, shape [particle_count], float
+        particle_max_radius (float): Maximum particle radius (useful for HashGrid construction)
         particle_ke (wp.array): Particle normal contact stiffness (used by SemiImplicitIntegrator), shape [particle_count], float
         particle_kd (wp.array): Particle normal contact damping (used by SemiImplicitIntegrator), shape [particle_count], float
         particle_kf (wp.array): Particle friction force stiffness (used by SemiImplicitIntegrator), shape [particle_count], float
@@ -308,6 +315,7 @@ class Model:
         particle_cohesion (wp.array): Particle cohesion strength, shape [particle_count], float
         particle_adhesion (wp.array): Particle adhesion strength, shape [particle_count], float
         particle_grid (HashGrid): HashGrid instance used for accelerated simulation of particle interactions
+        particle_enabled (wp.array): Particle enabled state, shape [particle_count], bool
 
         shape_transform (wp.array): Rigid shape transforms, shape [shape_count, 7], float
         shape_body (wp.array): Rigid shape body index, shape [shape_count], int
@@ -386,7 +394,6 @@ class Model:
 
         articulation_start (wp.array): Articulation start index, shape [articulation_count], int
 
-        soft_contact_distance (float): Radius around particles for soft contact generation
         soft_contact_margin (float): Contact margin for generation of soft contacts
         soft_contact_ke (float): Stiffness of soft contacts (used by SemiImplicitIntegrator)
         soft_contact_kd (float): Damping of soft contacts (used by SemiImplicitIntegrator)
@@ -433,7 +440,8 @@ class Model:
         self.particle_qd = None
         self.particle_mass = None
         self.particle_inv_mass = None
-        self.particle_radius = 0.0
+        self.particle_radius = None
+        self.particle_max_radius = 0.0
         self.particle_ke = 1.0e3
         self.particle_kd = 1.0e2
         self.particle_kf = 1.0e2
@@ -441,6 +449,7 @@ class Model:
         self.particle_cohesion = 0.0
         self.particle_adhesion = 0.0
         self.particle_grid = None
+        self.particle_enabled = None
 
         self.shape_transform = None
         self.shape_body = None
@@ -518,7 +527,6 @@ class Model:
         self.joint_attach_ke = 1.0e3
         self.joint_attach_kd = 1.0e2
 
-        self.soft_contact_distance = 0.1
         self.soft_contact_margin = 0.2
         self.soft_contact_ke = 1.0e3
         self.soft_contact_kd = 10.0
@@ -833,6 +841,10 @@ class ModelBuilder:
         desired.
     """
 
+    # Default particle settings
+    default_particle_radius = 0.1
+
+    # Default triangle soft mesh settings
     default_tri_ke = 100.0
     default_tri_ka = 100.0
     default_tri_kd = 10.0
@@ -843,7 +855,7 @@ class ModelBuilder:
     default_edge_ke = 100.0
     default_edge_kd = 0.0
 
-    # Default shape contact material properties
+    # Default rigid shape contact material properties
     default_shape_ke = 1.0e5
     default_shape_kd = 1000.0
     default_shape_kf = 1000.0
@@ -865,6 +877,8 @@ class ModelBuilder:
         self.particle_q = []
         self.particle_qd = []
         self.particle_mass = []
+        self.particle_radius = []
+        self.particle_enabled = []
 
         # shapes (each shape has an entry in these arrays)
         # transform from shape to body
@@ -1287,26 +1301,29 @@ class ModelBuilder:
         self.joint_angular_compliance.append(angular_compliance)
         self.joint_enabled.append(enabled)
 
+        def add_axis_dim(dim):
+            self.joint_axis.append(dim.axis)
+            self.joint_axis_mode.append(dim.mode)
+            self.joint_target.append(dim.target)
+            self.joint_target_ke.append(dim.target_ke)
+            self.joint_target_kd.append(dim.target_kd)
+            self.joint_limit_ke.append(dim.limit_ke)
+            self.joint_limit_kd.append(dim.limit_kd)
+            if np.isfinite(dim.limit_lower):
+                self.joint_limit_lower.append(dim.limit_lower)
+            else:
+                self.joint_limit_lower.append(-1e6)
+            if np.isfinite(dim.limit_upper):
+                self.joint_limit_upper.append(dim.limit_upper)
+            else:
+                self.joint_limit_upper.append(1e6)
+            # self.joint_limit_lower.append(dim.limit_lower)
+            # self.joint_limit_upper.append(dim.limit_upper)
+
         for dim in linear_axes:
-            self.joint_axis.append(dim.axis)
-            self.joint_axis_mode.append(dim.mode)
-            self.joint_target.append(dim.target)
-            self.joint_target_ke.append(dim.target_ke)
-            self.joint_target_kd.append(dim.target_kd)
-            self.joint_limit_ke.append(dim.limit_ke)
-            self.joint_limit_kd.append(dim.limit_kd)
-            self.joint_limit_lower.append(dim.limit_lower)
-            self.joint_limit_upper.append(dim.limit_upper)
+            add_axis_dim(dim)
         for dim in angular_axes:
-            self.joint_axis.append(dim.axis)
-            self.joint_axis_mode.append(dim.mode)
-            self.joint_target.append(dim.target)
-            self.joint_target_ke.append(dim.target_ke)
-            self.joint_target_kd.append(dim.target_kd)
-            self.joint_limit_ke.append(dim.limit_ke)
-            self.joint_limit_kd.append(dim.limit_kd)
-            self.joint_limit_lower.append(dim.limit_lower)
-            self.joint_limit_upper.append(dim.limit_upper)
+            add_axis_dim(dim)
 
         if joint_type == JOINT_PRISMATIC:
             dof_count = 1
@@ -2260,13 +2277,15 @@ class ModelBuilder:
         return shape
 
     # particles
-    def add_particle(self, pos: Vec3, vel: Vec3, mass: float) -> int:
+    def add_particle(self, pos: Vec3, vel: Vec3, mass: float, radius: float = None, enabled: bool = True) -> int:
         """Adds a single particle to the model
 
         Args:
             pos: The initial position of the particle
             vel: The initial velocity of the particle
             mass: The mass of the particle
+            enabled: If True, the particle participates in dynamics simulation and collision handling, otherwise it is disabled
+            radius: The radius of the particle used in collision handling. If None, the radius is set to the default value (default_particle_radius).
 
         Note:
             Set the mass equal to zero to create a 'kinematic' particle that does is not subject to dynamics.
@@ -2277,6 +2296,10 @@ class ModelBuilder:
         self.particle_q.append(pos)
         self.particle_qd.append(vel)
         self.particle_mass.append(mass)
+        if radius is None:
+            radius = self.default_particle_radius
+        self.particle_radius.append(radius)
+        self.particle_enabled.append(enabled)
 
         return len(self.particle_q) - 1
 
@@ -3178,6 +3201,9 @@ class ModelBuilder:
             m.particle_qd = wp.array(self.particle_qd, dtype=wp.vec3, requires_grad=requires_grad)
             m.particle_mass = wp.array(self.particle_mass, dtype=wp.float32, requires_grad=requires_grad)
             m.particle_inv_mass = wp.array(particle_inv_mass, dtype=wp.float32, requires_grad=requires_grad)
+            m.particle_radius = wp.array(self.particle_radius, dtype=wp.float32, requires_grad=requires_grad)
+            m.particle_enabled = wp.array(self.particle_enabled, dtype=wp.uint8)
+            m.particle_max_radius = np.max(self.particle_radius) if len(self.particle_radius) > 0 else 0.0
 
             # ---------------------
             # collision geometry
