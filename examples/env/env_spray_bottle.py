@@ -29,6 +29,7 @@ class SprayBottleEnvironment(Environment):
     sim_substeps_xpbd = 5
 
     activate_ground_plane = True
+    use_graph_capture = False
 
     num_envs = 100
 
@@ -38,9 +39,9 @@ class SprayBottleEnvironment(Environment):
         wp.sim.parse_urdf(
             os.path.join(os.path.dirname(__file__), "../assets/spray_bottle/mobility.urdf"),
             builder,
-            xform=wp.transform((0.0, 0.12, 0.0)),
+            xform=wp.transform((0.0, 0.22, 0.0)),
             floating=True,
-            density=0,
+            density=1000.0,
             armature=0.1,
             stiffness=0.0,
             damping=0.0,
@@ -52,6 +53,8 @@ class SprayBottleEnvironment(Environment):
             limit_kd=1.e+1,
             enable_self_collisions=False,
             parse_visuals_as_colliders=False)
+
+        # builder.joint_act[5] = 0.15
 
 
 if __name__ == "__main__":

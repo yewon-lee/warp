@@ -96,6 +96,7 @@ class Environment:
     opengl_render_settings = dict()
     usd_render_settings = dict(scaling=10.0)
     show_rigid_contact_points = False
+    contact_points_radius = 1e-3
     show_joints = False
     # whether OpenGLRenderer should render each environment in a separate tile
     use_tiled_rendering = False
@@ -179,6 +180,7 @@ class Environment:
             self.env_offset = (0.0, 0.0, 0.0)
 
         builder = wp.sim.ModelBuilder()
+        builder.rigid_contact_margin = self.rigid_contact_margin
         try:
             articulation_builder = wp.sim.ModelBuilder()
             self.create_articulation(articulation_builder)
@@ -221,6 +223,7 @@ class Environment:
                 self.sim_name,
                 up_axis=self.up_axis,
                 show_rigid_contact_points=self.show_rigid_contact_points,
+                contact_points_radius=self.contact_points_radius,
                 show_joints=self.show_joints,
                 **self.opengl_render_settings)
             if self.use_tiled_rendering and self.num_envs > 1:
@@ -293,9 +296,7 @@ class Environment:
         self.state_1 = self.model.state()
 
         if self.eval_fk:
-            # wp.sim.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, None, self.state_0)
-            for _ in range(1):
-                wp.sim.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, None, self.state_0)
+            wp.sim.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, None, self.state_0)
 
         self.before_simulate()
 
@@ -339,27 +340,19 @@ class Environment:
                         wp.capture_launch(graph)
                         self.sim_time += self.frame_dt
                     else:
-                        for i in range(0, self.sim_substeps):
-                            self.state_0.clear_forces()
-                            self.custom_update()
-                            wp.sim.collide(self.model, self.state_0)
-                            self.integrator.simulate(
-                                self.model, self.state_0, self.state_1, self.sim_dt, requires_grad=self.requires_grad
-                            )
-                            self.state_0, self.state_1 = self.state_1, self.state_0
+                        self.update()
+                        self.sim_time += self.frame_dt
 
-                            self.sim_time += self.sim_dt
+                        if not self.profile:
+                            if self.plot_body_coords:
+                                q_history.append(self.state_0.body_q.numpy().copy())
+                                qd_history.append(self.state_0.body_qd.numpy().copy())
+                                delta_history.append(self.state_0.body_deltas.numpy().copy())
+                                num_con_history.append(self.model.rigid_contact_inv_weight.numpy().copy())
 
-                            if not self.profile:
-                                if self.plot_body_coords:
-                                    q_history.append(self.state_0.body_q.numpy().copy())
-                                    qd_history.append(self.state_0.body_qd.numpy().copy())
-                                    delta_history.append(self.state_0.body_deltas.numpy().copy())
-                                    num_con_history.append(self.model.rigid_contact_inv_weight.numpy().copy())
-
-                                if self.plot_joint_coords:
-                                    wp.sim.eval_ik(self.model, self.state_0, joint_q, joint_qd)
-                                    joint_q_history.append(joint_q.numpy().copy())
+                            if self.plot_joint_coords:
+                                wp.sim.eval_ik(self.model, self.state_0, joint_q, joint_qd)
+                                joint_q_history.append(joint_q.numpy().copy())
 
                     self.render()
                     if self.render_mode == RenderMode.OPENGL and self.renderer.has_exit:
