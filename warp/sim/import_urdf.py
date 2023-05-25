@@ -12,7 +12,6 @@ import xml.etree.ElementTree as ET
 
 import warp as wp
 from warp.sim.model import Mesh
-from warp.sim.utils import load_mesh
 
 from typing import Union
 
@@ -35,10 +34,11 @@ def parse_urdf(
         shape_thickness=0.0,
         limit_ke=100.0,
         limit_kd=10.0,
+        scale=1.0,
         parse_visuals_as_colliders=False,
         enable_self_collisions=True,
         ignore_inertial_definitions=True,
-        ensure_nonstatic_links=False,
+        ensure_nonstatic_links=True,
         static_link_mass=1e-2,
         collapse_fixed_joints=False):
 
@@ -51,7 +51,7 @@ def parse_urdf(
         origin = element.find('origin')
         xyz = origin.get('xyz') or '0 0 0'
         rpy = origin.get('rpy') or '0 0 0'
-        xyz = [float(x) for x in xyz.split()]
+        xyz = [float(x) * scale for x in xyz.split()]
         rpy = [float(x) for x in rpy.split()]
         return wp.transform(xyz, wp.quat_rpy(*rpy))
 
@@ -67,8 +67,6 @@ def parse_urdf(
             tf = parse_origin(collision)
             if incoming_xform is not None:
                 tf = incoming_xform * tf
-                
-            print("tf", tf)
 
             for box in geo.findall('box'):
                 size = box.get('size') or '1 1 1'
@@ -77,9 +75,9 @@ def parse_urdf(
                     body=link,
                     pos=tf.p,
                     rot=tf.q,
-                    hx=size[0] * 0.5,
-                    hy=size[1] * 0.5,
-                    hz=size[2] * 0.5,
+                    hx=size[0] * 0.5 * scale,
+                    hy=size[1] * 0.5 * scale,
+                    hz=size[2] * 0.5 * scale,
                     density=density,
                     ke=shape_ke,
                     kd=shape_kd,
@@ -93,7 +91,7 @@ def parse_urdf(
                     body=link,
                     pos=tf.p,
                     rot=tf.q,
-                    radius=float(sphere.get('radius') or '1'),
+                    radius=float(sphere.get('radius') or '1') * scale,
                     density=density,
                     ke=shape_ke,
                     kd=shape_kd,
@@ -107,8 +105,8 @@ def parse_urdf(
                     body=link,
                     pos=tf.p,
                     rot=tf.q,
-                    radius=float(cylinder.get('radius') or '1'),
-                    half_height=float(cylinder.get('length') or '1') * 0.5,
+                    radius=float(cylinder.get('radius') or '1') * scale,
+                    half_height=float(cylinder.get('length') or '1') * 0.5 * scale,
                     density=density,
                     ke=shape_ke,
                     kd=shape_kd,
@@ -141,23 +139,46 @@ def parse_urdf(
                     import warnings
                     warnings.warn(f'Warning: mesh file {filename} does not exist')
                     continue
-                vertices, faces = load_mesh(filename)
-                scale = mesh.get('scale') or '1 1 1'
-                scale = np.array([float(x) for x in scale.split()])
-                vertices *= scale
-                mesh = Mesh(vertices, faces)
-                builder.add_shape_mesh(
-                    body=link,
-                    pos=tf.p,
-                    rot=tf.q,
-                    mesh=mesh,
-                    density=density,
-                    ke=shape_ke,
-                    kd=shape_kd,
-                    kf=shape_kf,
-                    mu=shape_mu,
-                    restitution=shape_restitution,
-                    thickness=shape_thickness)
+
+                import trimesh
+                m = trimesh.load_mesh(filename)
+                scaling = mesh.get('scale') or '1 1 1'
+                scaling = np.array([float(x) * scale for x in scaling.split()])
+                if hasattr(m, 'geometry'):
+                    # multiple meshes are contained in a scene
+                    for geom in m.geometry.values():
+                        vertices = np.array(geom.vertices, dtype=np.float32) * scaling
+                        faces = np.array(geom.faces, dtype=np.int32)
+                        mesh = Mesh(vertices, faces)
+                        builder.add_shape_mesh(
+                            body=link,
+                            pos=tf.p,
+                            rot=tf.q,
+                            mesh=mesh,
+                            density=density,
+                            ke=shape_ke,
+                            kd=shape_kd,
+                            kf=shape_kf,
+                            mu=shape_mu,
+                            restitution=shape_restitution,
+                            thickness=shape_thickness)
+                else:
+                    # a single mesh
+                    vertices = np.array(m.vertices, dtype=np.float32) * scaling
+                    faces = np.array(m.faces, dtype=np.int32)
+                    mesh = Mesh(vertices, faces)
+                    builder.add_shape_mesh(
+                        body=link,
+                        pos=tf.p,
+                        rot=tf.q,
+                        mesh=mesh,
+                        density=density,
+                        ke=shape_ke,
+                        kd=shape_kd,
+                        kf=shape_kf,
+                        mu=shape_mu,
+                        restitution=shape_restitution,
+                        thickness=shape_thickness)
 
     # maps from link name -> link index
     link_index = {}
@@ -191,12 +212,12 @@ def parse_urdf(
             inertial_frame = parse_origin(inertial)
             com = inertial_frame.p
             I_m = np.zeros((3, 3))
-            I_m[0, 0] = float(inertial.find('inertia').get('ixx') or '0')
-            I_m[1, 1] = float(inertial.find('inertia').get('iyy') or '0')
-            I_m[2, 2] = float(inertial.find('inertia').get('izz') or '0')
-            I_m[0, 1] = float(inertial.find('inertia').get('ixy') or '0')
-            I_m[0, 2] = float(inertial.find('inertia').get('ixz') or '0')
-            I_m[1, 2] = float(inertial.find('inertia').get('iyz') or '0')
+            I_m[0, 0] = float(inertial.find('inertia').get('ixx') or '0') * scale**2
+            I_m[1, 1] = float(inertial.find('inertia').get('iyy') or '0') * scale**2
+            I_m[2, 2] = float(inertial.find('inertia').get('izz') or '0') * scale**2
+            I_m[0, 1] = float(inertial.find('inertia').get('ixy') or '0') * scale**2
+            I_m[0, 2] = float(inertial.find('inertia').get('ixz') or '0') * scale**2
+            I_m[1, 2] = float(inertial.find('inertia').get('iyz') or '0') * scale**2
             I_m[1, 0] = I_m[0, 1]
             I_m[2, 0] = I_m[0, 2]
             I_m[2, 1] = I_m[1, 2]
@@ -212,7 +233,7 @@ def parse_urdf(
             # set the mass to something nonzero to ensure the body is dynamic
             m = static_link_mass
             # cube with side length 0.5
-            I_m = np.eye(3) * 0.5 * m / 12.0
+            I_m = np.eye(3)* m / 12.0 * (0.5 * scale)**2 * 2.0
             builder.body_mass[link] = m
             builder.body_inv_mass[link] = 1.0 / m
             builder.body_inertia[link] = I_m
@@ -348,15 +369,11 @@ def parse_urdf(
             # we skipped the insertion of the child body
             continue
 
-        origin = joint['origin']
-        pos = origin.p
-        rot = origin.q
-
         lower = joint['limit_lower']
         upper = joint['limit_upper']
         joint_damping = joint['damping']
 
-        parent_xform = wp.transform(pos, rot)
+        parent_xform = joint['origin']
         child_xform = wp.transform_identity()
 
         joint_mode = wp.sim.JOINT_MODE_LIMIT
@@ -383,7 +400,7 @@ def parse_urdf(
             builder.add_joint_prismatic(
                 axis=joint['axis'],
                 target_ke=stiffness, target_kd=joint_damping,
-                limit_lower=lower, limit_upper=upper,
+                limit_lower=lower * scale, limit_upper=upper * scale,
                 limit_ke=limit_ke, limit_kd=limit_kd,
                 mode=joint_mode,
                 **joint_params)
@@ -408,10 +425,10 @@ def parse_urdf(
             builder.add_joint_d6(
                 linear_axes=[
                     wp.sim.JointAxis(
-                        u, limit_lower=lower, limit_upper=upper, limit_ke=limit_ke, limit_kd=limit_kd
+                        u, limit_lower=lower * scale, limit_upper=upper * scale, limit_ke=limit_ke, limit_kd=limit_kd
                     ),
                     wp.sim.JointAxis(
-                        v, limit_lower=lower, limit_upper=upper, limit_ke=limit_ke, limit_kd=limit_kd
+                        v, limit_lower=lower * scale, limit_upper=upper * scale, limit_ke=limit_ke, limit_kd=limit_kd
                     ),
                 ],
                 **joint_params)
