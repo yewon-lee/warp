@@ -6,6 +6,11 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
+namespace wp
+{
+    static bool WARP_FORWARD_MODE = true;
+}
+
 #include "warp.h"
 #include "cuda_util.h"
 #include "hashgrid.h"

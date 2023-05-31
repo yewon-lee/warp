@@ -6,6 +6,11 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
+namespace wp
+{
+    static bool WARP_FORWARD_MODE = true;
+}
+
 #include "mesh.h"
 #include "bvh.h"
 #include "warp.h"

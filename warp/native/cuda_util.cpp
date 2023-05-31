@@ -8,6 +8,11 @@
 
 #if WP_ENABLE_CUDA
 
+namespace wp
+{
+    static bool WARP_FORWARD_MODE = true;
+}
+
 #include "cuda_util.h"
 
 #if defined(_WIN32)
