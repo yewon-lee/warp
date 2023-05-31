@@ -50,6 +50,8 @@ class AllegroEnvironment(Environment):
 
     # render_mode = RenderMode.USD
 
+    rigid_mesh_contact_max = 1000
+
     def create_articulation(self, builder):
         wp.sim.parse_urdf(
             os.path.join(

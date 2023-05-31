@@ -913,4 +913,21 @@ inline CUDA_CALLABLE void adj_atomic_max(const A1<T>& buf, int i, int j, int k, 
 template<template<typename> class A1, template<typename> class A2, typename T>
 inline CUDA_CALLABLE void adj_atomic_max(const A1<T>& buf, int i, int j, int k, int l, T value, const A2<T>& adj_buf, int& adj_i, int& adj_j, int& adj_k, int& adj_l, T& adj_value, const T& adj_ret) {}
 
+template<typename T> inline CUDA_CALLABLE T inc_index(const array_t<T>& buf, T buf_index, const array_t<T>& tids, int tid, T idx_limit) {
+    if (WARP_FORWARD_MODE) {
+        T next = atomic_add(buf, buf_index, T(1));
+        if (idx_limit < 0 || next < idx_limit) {
+            store(tids, tid, next);
+            return next;
+        }
+        store(tids, tid, T(-1));
+        return T(-1);
+    }
+    return index(tids, tid);
+}
+
+template<typename T> inline CUDA_CALLABLE void adj_inc_index(const array_t<T>& buf, T buf_index, const array_t<T>& tids, int tid, T idx_limit, const array_t<T>& adj_buf, T& adj_buf_index, const array_t<T>& adj_tids, int& adj_tid, T& adj_idx_limit, const T& adj_ret) {
+
+}
+
 } // namespace wp

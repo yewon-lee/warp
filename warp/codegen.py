@@ -1605,6 +1605,7 @@ class Adjoint:
 # code generation
 
 cpu_module_header = """
+bool WARP_FORWARD_MODE = true;
 #define WP_NO_CRT
 #include "../native/builtin.h"
 
@@ -1620,6 +1621,7 @@ using namespace wp;
 """
 
 cuda_module_header = """
+__device__ bool WARP_FORWARD_MODE = true;
 #define WP_NO_CRT
 #include "../native/builtin.h"
 
@@ -1701,6 +1703,7 @@ cuda_kernel_template = """
 extern "C" __global__ void {name}_cuda_kernel_forward(
     {forward_args})
 {{
+    WARP_FORWARD_MODE = true;
     size_t _idx = grid_index();
     if (_idx >= dim.size)
         return;
@@ -1713,6 +1716,7 @@ extern "C" __global__ void {name}_cuda_kernel_forward(
 extern "C" __global__ void {name}_cuda_kernel_backward(
     {reverse_args})
 {{
+    WARP_FORWARD_MODE = false;
     size_t _idx = grid_index();
     if (_idx >= dim.size)
         return;
@@ -1729,12 +1733,14 @@ cpu_kernel_template = """
 void {name}_cpu_kernel_forward(
     {forward_args})
 {{
+    WARP_FORWARD_MODE = true;
 {forward_body}
 }}
 
 void {name}_cpu_kernel_backward(
     {reverse_args})
 {{
+    WARP_FORWARD_MODE = false;
 {reverse_body}
 }}
 

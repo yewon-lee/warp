@@ -125,6 +125,9 @@ class Environment:
     # distance threshold at which contacts are generated
     rigid_contact_margin: float = 0.05
 
+    # maximum number of contacts per rigid body mesh
+    rigid_mesh_contact_max = 10000
+
     # whether each environment should have its own collision group
     # to avoid collisions between environments
     separate_collision_group_per_env: bool = True
@@ -196,7 +199,7 @@ class Environment:
             self.setup(builder)
             self.bodies_per_env = len(builder.body_q)
 
-        self.model = builder.finalize()
+        self.model = builder.finalize(rigid_mesh_contact_max=self.rigid_mesh_contact_max)
         self.device = self.model.device
         if not self.device.is_cuda:
             self.use_graph_capture = False

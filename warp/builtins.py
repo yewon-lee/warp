@@ -2850,3 +2850,6 @@ for t in int_types:
 
 
 add_builtin("unot", input_types={"a": array(dtype=Any)}, value_type=bool, doc="", group="Operators")
+
+add_builtin("inc_index", input_types={"counts": array(dtype=int), "count_index": int, "tids": array(dtype=int), "tid": int, "limit": int}, value_type=int,
+            doc="Atomically increment index array ``counts`` at the given `count_index` and keep track of the given thread ID `tid` mapping to this index in the `tids` array, so that the backward pass can reuse the same index. If the index is greater than ``idx_limit`` then the returned index will be -1.", group="Utility", skip_replay=False)
