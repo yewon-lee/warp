@@ -50,8 +50,6 @@ class AllegroEnvironment(Environment):
 
     # render_mode = RenderMode.USD
 
-    rigid_mesh_contact_max = 1000
-
     def create_articulation(self, builder):
         wp.sim.parse_urdf(
             os.path.join(
@@ -60,7 +58,7 @@ class AllegroEnvironment(Environment):
             builder,
             xform=wp.transform(np.array((0.0, 0.3, 0.0)), wp.quat_rpy(-np.pi / 2, np.pi * 0.75, np.pi / 2)),
             floating=False,
-            fixed_base_joint="rx, ry, rz",
+            base_joint="rx, ry, rz",
             density=1e3,
             armature=0.01,
             stiffness=1000.0,
