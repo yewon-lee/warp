@@ -6,11 +6,6 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
-namespace wp
-{
-    static bool WARP_FORWARD_MODE = true;
-}
-
 #include "builtin.h"
 
 // stubs for platforms where there is no CUDA

@@ -6,11 +6,6 @@
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
  */
 
-namespace wp
-{
-    static bool WARP_FORWARD_MODE = true;
-}
-
 #include "volume.h"
 #include "volume_builder.h"
 #include "warp.h"
