@@ -817,17 +817,19 @@ class Model:
             target.rigid_contact_tids = wp.zeros(self.rigid_contact_max, dtype=wp.int32, device=self.device)
 
     def flatten(self):
-        """Returns a list of Tensors stored by the model
+        import warnings
 
-        This function is intended to be used internal-only but can be used to obtain
-        a set of all tensors owned by the model.
-        """
+        warnings.warn(
+            "Model.flatten() will be removed in a future Warp version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
         tensors = []
 
         # build a list of all tensor attributes
         for attr, value in self.__dict__.items():
-            if wp.is_tensor(value):
+            if isinstance(value, wp.array):
                 tensors.append(value)
 
         return tensors
@@ -1119,7 +1121,7 @@ class ModelBuilder:
         # every simulation substep (can be 0 if only one PBD solver iteration is used)
         self.rigid_contact_margin = 0.1
         # torsional friction coefficient (only considered by XPBD so far)
-        self.rigid_contact_torsional_friction = 0.5
+        self.rigid_contact_torsional_friction = 0.0
         # rolling friction coefficient (only considered by XPBD so far)
         self.rigid_contact_rolling_friction = 0.001
 
