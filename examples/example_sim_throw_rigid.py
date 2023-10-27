@@ -220,7 +220,7 @@ if DEBUG:
 else:
     sim = Environment(device=wp.get_preferred_device())
 
-best_actions = sim.optimize(num_iter=80, lr=3e-2, render=False)
+best_actions = sim.optimize(num_iter=80, lr=3e-2, render=True)
 
 sim.renderer = wp.sim.render.SimRendererOpenGL(
     sim.model,

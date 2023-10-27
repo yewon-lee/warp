@@ -38,10 +38,14 @@ class Tape:
         print(tape.gradients[a])
 
     """
+
     def __init__(self):
         self.gradients = {}
         self.const_gradients = set()
         self.launches = []
+        self.scopes = []
+
+        self.enable_recording = True
 
         self.loss = None
 
@@ -62,13 +66,15 @@ class Tape:
     def forward(self, check_nans=True):
 
         # run launches forwards
-        for launch in self.launches:
+        from tqdm import tqdm
+        for launch in tqdm(self.launches, desc="Tape forward pass"):
 
             kernel = launch[0]
             dim = launch[1]
-            inputs = launch[2]
-            outputs = launch[3]
-            device = launch[4]
+            max_blocks = launch[2]
+            inputs = launch[3]
+            outputs = launch[4]
+            device = launch[5]
 
             wp.launch(
                 kernel=kernel,
@@ -82,10 +88,11 @@ class Tape:
                     if isinstance(o, wp.array):
                         if np.isnan(o.numpy()).any():
                             raise RuntimeError("Warp: Error, NaN detected in output array. Check your kernel for errors.")
-                for i in inputs:
-                    if isinstance(i, wp.array):
-                        if np.isnan(i.numpy()).any():
-                            raise RuntimeError("Warp: Error, NaN detected in input array. Check your kernel for errors.")
+                # TODO handle array of structs
+                # for i in inputs:
+                #     if isinstance(i, wp.array):
+                #         if np.isnan(i.numpy()).any():
+                #             raise RuntimeError("Warp: Error, NaN detected in input array. Check your kernel for errors.")
 
     # adj_outputs is a mapping from output tensor -> adjoint of the output
     # after running backward the gradients of tensors may be retrieved by:
@@ -110,7 +117,7 @@ class Tape:
             if loss.size > 1 or wp.types.type_length(loss.dtype) > 1:
                 raise RuntimeError("Can only return gradients for scalar loss functions.")
 
-            if loss.requires_grad == False:
+            if loss.requires_grad is False:
                 raise RuntimeError(
                     "Scalar loss arrays should have requires_grad=True set before calling Tape.backward()"
                 )
@@ -123,7 +130,11 @@ class Tape:
         # existing code before we added wp.array.grad attribute
         if grads:
             for a, g in grads.items():
-                a.grad = g
+                if a.grad is None:
+                    a.grad = g
+                else:
+                    # ensure we can capture this backward pass in a CUDA graph
+                    a.grad.assign(g)
                 self.const_gradients.add(a)
 
         # run launches backwards
@@ -134,9 +145,10 @@ class Tape:
             else:
                 kernel = launch[0]
                 dim = launch[1]
-                inputs = launch[2]
-                outputs = launch[3]
-                device = launch[4]
+                max_blocks = launch[2]
+                inputs = launch[3]
+                outputs = launch[4]
+                device = launch[5]
 
                 adj_inputs = []
                 adj_outputs = []
@@ -158,11 +170,14 @@ class Tape:
                     adj_outputs=adj_outputs,
                     device=device,
                     adjoint=True,
+                    max_blocks=max_blocks,
                 )
 
     # record a kernel launch on the tape
-    def record_launch(self, kernel, dim, inputs, outputs, device):
-        self.launches.append([kernel, dim, inputs, outputs, device])
+    def record_launch(self, kernel, dim, max_blocks, inputs, outputs, device, meta_data=None):
+        if not self.enable_recording:
+            return
+        self.launches.append([kernel, dim, max_blocks, inputs, outputs, device, meta_data])
 
     def record_func(self, backward, arrays):
         """
@@ -172,6 +187,8 @@ class Tape:
             backward (Callable): A callable Python object (can be any function) that will be executed in the backward pass.
             arrays (list): A list of arrays that are used by the function for gradient tracking.
         """
+        if not self.enable_recording:
+            return
         self.launches.append(backward)
 
         for a in arrays:
@@ -181,6 +198,16 @@ class Tape:
                 raise RuntimeError(
                     f"Array {a} is not of type wp.array or is missing a gradient array. Set array parameter requires_grad=True during instantiation."
                 )
+
+    def record_scope_begin(self, scope_name):
+        if not self.enable_recording:
+            return
+        self.scopes.append((len(self.launches), scope_name))
+
+    def record_scope_end(self):
+        if not self.enable_recording:
+            return
+        self.scopes.append((len(self.launches), None))
 
     # returns the adjoint of a kernel parameter
     def get_adjoint(self, a):
@@ -220,6 +247,7 @@ class Tape:
         Clear all operations recorded on the tape and zero out all gradients.
         """
         self.launches = []
+        self.scopes = []
         self.zero()
 
     def zero(self):

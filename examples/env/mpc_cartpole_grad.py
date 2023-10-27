@@ -11,9 +11,10 @@
 ###########################################################################
 
 from warp.sim.integrator_xpbd import apply_joint_torques
-from warp.tests.grad_utils import check_tape_safety, check_backward_pass, check_jacobian, function_jacobian_fd
+from warp.tests.grad_utils import check_tape_safety, check_backward_pass, check_jacobian, function_jacobian_fd, plot_state_gradients
 from warp.optim import Adam, SGD
 from environment import RenderMode
+import os
 import sys
 import numpy as np
 import warp as wp
@@ -228,9 +229,9 @@ class Controller:
 
     noise_scale = 0.1
 
-    # interpolation_mode = InterpolationMode.INTERPOLATE_LINEAR
+    interpolation_mode = InterpolationMode.INTERPOLATE_LINEAR
     # interpolation_mode = InterpolationMode.INTERPOLATE_CUBIC
-    interpolation_mode = InterpolationMode.INTERPOLATE_HOLD
+    # interpolation_mode = InterpolationMode.INTERPOLATE_HOLD
 
     def __init__(self, env_fn):
 
@@ -238,7 +239,7 @@ class Controller:
         self.traj_length = 15000
 
         # time steps between control points
-        self.control_step = 10
+        self.control_step = 30
         # number of control horizon points to interpolate between
         self.num_control_points = 3
         # total number of horizon time steps
@@ -269,7 +270,7 @@ class Controller:
         self.env_ref.init()
         self.dof_count = len(self.env_ref.control)
 
-        self.use_graph_capture = wp.get_device(self.device).is_cuda
+        self.use_graph_capture = False  # wp.get_device(self.device).is_cuda
 
         # optimized control points for the current horizon
         self.best_traj = None
@@ -472,30 +473,33 @@ class Controller:
         self.pick_best_control()
 
     def optimize(self, state):
-        num_opt_steps = 15
+        num_opt_steps = 5
         # gradient-based optimization
         if self._optimizer is None:
             # TODO try Adam
-            self._optimizer = SGD([self.rollout_trajectories], lr=1e-2, nesterov=False, momentum=0.0)
-            # self._optimizer = Adam([self.rollout_trajectories], lr=1e-4)
+            self._optimizer = SGD([self.rollout_trajectories.flatten()], lr=2e-6, nesterov=False, momentum=0.0)
+            # self._optimizer = Adam([self.rollout_trajectories.flatten()], lr=1e-2)
         if self.use_graph_capture:
             self.sample_controls(self.best_traj)
             if self._opt_graph is None or self.env_ref.invalidate_cuda_graph:
-                self.env_rollout.flight_target = self.env_ref.flight_target
                 wp.capture_begin()
                 self.tape = wp.Tape()
                 with self.tape:
                     self.rollout(state, self.rollout_trajectories)
                 self.rollout_costs.grad.fill_(1.0)
                 self.tape.backward()
-                self._optimizer.step([self.rollout_trajectories.grad])
+                self._optimizer.step([self.rollout_trajectories.grad.flatten()])
                 self.clamp_controls()
                 self.tape.zero()
                 self._opt_graph = wp.capture_end()
                 self.env_ref.invalidate_cuda_graph = False
 
-            for _ in range(num_opt_steps):
+            for it in range(num_opt_steps):
                 wp.capture_launch(self._opt_graph)
+                self.clamp_controls()
+                # print(f"\niter {it} cost:", self.rollout_costs.numpy().flatten())
+                # print("\tcontrols:", self.rollout_trajectories.numpy().flatten())
+                # print("\tclamped controls:", self.rollout_trajectories.numpy().flatten())
         else:
             self.sample_controls(self.best_traj)
             for it in range(num_opt_steps):
@@ -521,7 +525,6 @@ class Controller:
 
                     # check_backward_pass(
                     #     self.tape,
-                    #     visualize_graph=False,
                     #     analyze_graph=True,
                     #     plot_jac_on_fail=True,
                     #     track_inputs=[self.rollout_trajectories],
@@ -536,6 +539,9 @@ class Controller:
 
                     self.rollout_costs.grad.fill_(1.0)
                     self.tape.backward()
+                    
+                    plot_state_gradients(self.env_rollout.states, os.path.join(os.path.dirname(
+                        __file__), "mpc_grads.html"))
                 else:
                     jac_fd = function_jacobian_fd(
                         lambda controls: self.rollout(state, controls),
@@ -543,7 +549,7 @@ class Controller:
                         eps=1e-3)
                     self.rollout_trajectories.grad.assign(jac_fd)
 
-                self._optimizer.step([self.rollout_trajectories.grad])
+                self._optimizer.step([self.rollout_trajectories.grad.flatten()])
                 lr = 1.5e-3
                 print(f"\niter {it} cost:", self.rollout_costs.numpy().flatten())
                 # print("\tchecked cost 1:", self.rollout(state, self.rollout_trajectories).numpy())
@@ -794,9 +800,9 @@ if __name__ == "__main__":
     HopperEnvironment.env_offset = (0.0, 0.0, 0.0)
     DroneEnvironment.env_offset = (0.0, 0.0, 0.0)
 
-    # mpc = Controller(AntEnvironment)
+    mpc = Controller(AntEnvironment)
     # mpc = Controller(HopperEnvironment)
     # mpc = Controller(CartpoleEnvironment)
-    mpc = Controller(DroneEnvironment)
+    # mpc = Controller(DroneEnvironment)
 
     mpc.run()

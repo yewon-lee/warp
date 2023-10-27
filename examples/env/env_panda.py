@@ -6,7 +6,7 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 ###########################################################################
-# Hopper environment
+# Panda environment
 #
 # Shows how to set up a simulation of a rigid-body Hopper articulation based on
 # the OpenAI gym environment using the Environment class and MCJF
@@ -14,26 +14,26 @@
 #
 ###########################################################################
 
-import os
-
 import warp as wp
 import warp.sim
+
+import numpy as np
 
 from environment import Environment, run_env
 
 
 @wp.kernel
-def hopper_cost(
+def panda_cost(
     body_q: wp.array(dtype=wp.transform),
     body_qd: wp.array(dtype=wp.spatial_vector),
     cost: wp.array(dtype=wp.float32),
 ):
     env_id = wp.tid()
-    base_tf = body_q[env_id * 4+2]
+    base_tf = body_q[env_id * 4 + 2]
 
     pos_base = wp.transform_get_translation(base_tf)
     rot_base = wp.transform_get_rotation(base_tf)
-    vel_base = body_qd[env_id * 4+2]
+    vel_base = body_qd[env_id * 4 + 2]
 
     # cost[env_id] = cost[env_id] + (vel_base[4]) + pos_base[0] * 10.0
     # cost[env_id] = 0.95 * cost[env_id] + 10.0 * (cart_cost + pole_cost) + 0.02 * vel_cost
@@ -51,12 +51,20 @@ def hopper_cost(
     height_reward = pos_base[1] - termination_height
     progress_reward = vel_base[3]  # double-check!
 
-    reward = progress_reward # + 0.001 * (up_reward + heading_reward + height_reward)
+    reward = progress_reward  # + 0.001 * (up_reward + heading_reward + height_reward)
     cost[env_id] = cost[env_id] - reward
 
 
-class HopperEnvironment(Environment):
-    sim_name = "env_hopper"
+@wp.kernel
+def apply_forces(time: float, act_dim: int, joint_act: wp.array(dtype=float)):
+    tid = wp.tid()
+    joint_act[tid * act_dim + 1] = -12.0  # XXX need to revert force direction because joint is rotated
+    # joint_act[tid*act_dim + 2] = wp.sin(time * 0.5)
+    joint_act[tid * act_dim + 3] = wp.sin(time * 0.5)
+
+
+class PandaEnvironment(Environment):
+    sim_name = "env_panda"
     env_offset = (2.5, 0.0, 2.5)
     opengl_render_settings = dict(scaling=1.0)
     usd_render_settings = dict(scaling=100.0)
@@ -64,53 +72,71 @@ class HopperEnvironment(Environment):
     sim_substeps_euler = 32
     sim_substeps_xpbd = 5
 
-    xpbd_settings = dict(iterations=7)
+    xpbd_settings = dict(iterations=5)
 
     joint_attach_ke: float = 100000.0
     joint_attach_kd: float = 10.0
 
-    use_graph_capture = True
+    use_graph_capture = False
     use_tiled_rendering = False
-    show_joints = True
+    show_joints = False
+
+    show_rigid_contact_points = True
 
     controllable_dofs = [3, 4, 5]
     control_gains = [100.0] * 3
     control_limits = [(-1.0, 1.0)] * 3
+    
+    # requires_grad = True
+    episode_duration = 1.1
 
     def create_articulation(self, builder):
-        wp.sim.parse_mjcf(
-            os.path.join(os.path.dirname(__file__), "../assets/hopper.xml"),
+        wp.sim.parse_urdf(
+            r"C:\Users\eric-\source\repos\warp-tool-use-yewon\examples\assets\panda\panda_gripper.urdf",
+            # r"C:\Users\eheiden\Documents\warp-tool-use-yewon\examples\assets\panda\panda_gripper_nostick.urdf",
+            # r"F:\Projects\warp-tool-use-yewon\svgd\assets\panda\panda_gripper.urdf",
             builder,
-            stiffness=0.0,
-            damping=0.001,
+            # xform=wp.transform(np.array([(i//10)*1.0, 0.30, (i%10)*1.0]), wp.quat_from_axis_angle((1.0, 0.0, 0.0), math.pi*0.5)),
+            # xform=wp.transform(wp.array(panda_pos), wp.quat_from_axis_angle((1.0, 0.0, 0.0), 0)),
+            xform=wp.transform(
+                np.array([0., 0.30, 0.]),
+                wp.quat_identity(),
+                # wp.quat_from_axis_angle((0.0, 0.0, 1.0), -np.pi * 0.5)
+            ),
+            floating=False,
+            base_joint="px, py, pz, ry",
+            density=1000,
             armature=0.001,
-            contact_ke=1.0e4,
-            contact_kd=1.0e2,
-            contact_kf=1.0e4,
-            contact_mu=1.0,
-            limit_ke=1.0e4,
-            limit_kd=1.0e1,
+            stiffness=0.0,
+            damping=10,
+            shape_ke=1.e+4,
+            shape_kd=1.e+2,
+            shape_kf=1.e+2,
+            shape_mu=1.5,
+            # shape_thickness=self.contact_thickness,
+            limit_ke=1.e+4,
+            limit_kd=1.e+1,
+            parse_visuals_as_colliders=True,
             enable_self_collisions=False,
-        )
-        builder.collapse_fixed_joints()
-        # initial planar velocity
-        # builder.joint_qd[0] = 2.0
-        # builder.joint_qd[1] = 2.0
-        builder.joint_q[0] = 0.0
-        builder.joint_q[1] = -1.2
-        builder.joint_q[2] = 0.4
-        # builder.joint_q[3] = 0.5
-        builder.joint_q[5] = 0.4
+            collapse_fixed_joints=True)
+        self.act_dim = len(builder.joint_act)
+        print("act dof:", self.act_dim)
 
     def evaluate_cost(self, state: wp.sim.State, cost: wp.array, step: int, horizon_length: int):
         wp.launch(
-            hopper_cost,
+            panda_cost,
             dim=self.num_envs,
             inputs=[state.body_q, state.body_qd],
             outputs=[cost],
             device=self.device
         )
 
+    def custom_update(self):
+        wp.launch(apply_forces,
+                  dim=self.num_envs,
+                  inputs=[self.sim_time, self.act_dim],
+                  outputs=[self.state.joint_act],)
+
 
 if __name__ == "__main__":
-    run_env(HopperEnvironment)
+    run_env(PandaEnvironment)

@@ -35,7 +35,7 @@ class ShadowHandEnvironment(Environment):
 
     num_envs = 1
 
-    show_joints = False
+    show_joints = True
 
     xpbd_settings = dict(
         iterations=10,
@@ -50,6 +50,8 @@ class ShadowHandEnvironment(Environment):
 
     activate_ground_plane = False
 
+    show_joints = True
+
     # render_mode = RenderMode.USD
 
     def create_articulation(self, builder):
@@ -58,7 +60,7 @@ class ShadowHandEnvironment(Environment):
                 os.path.dirname(__file__),
                 "../assets/shadow_hand/right_hand.xml"),
             builder,
-            stiffness=10.0,
+            # stiffness=10.0,
             ignore_classes=["plastic_collision"])
 
         # builder.plot_articulation()

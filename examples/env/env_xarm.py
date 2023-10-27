@@ -26,7 +26,7 @@ from environment import Environment, run_env
 class XarmEnvironment(Environment):
     sim_name = "example_sim_xarm"
     env_offset = (0.8, 0.0, 0.8)
-    opengl_render_settings = dict(scaling=10.0)
+    opengl_render_settings = dict(scaling=2.0)
     usd_render_settings = dict(scaling=100.0)
 
     sim_substeps_euler = 32

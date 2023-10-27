@@ -228,6 +228,8 @@ class Environment:
         self.model.joint_attach_ke = self.joint_attach_ke
         self.model.joint_attach_kd = self.joint_attach_kd
 
+        self.model.state_augment_fns.append(self.custom_augment_state)
+
         if self.requires_grad:
             self.states = [self.model.state() for _ in range(self.sim_steps + 1)]
             self.update = self.update_grad
@@ -298,6 +300,9 @@ class Environment:
     def custom_render(self, render_state):
         pass
 
+    def custom_augment_state(self, model, state):
+        pass
+
     @property
     def state(self):
         # shortcut to current state
@@ -341,7 +346,7 @@ class Environment:
         for i in range(self.sim_substeps):
             self.states[self.sim_step].clear_forces()
             self.custom_update()
-            wp.sim.collide(self.model, self.states[self.sim_step])
+            wp.sim.collide(self.model, self.states[self.sim_step], edge_sdf_iter=self.edge_sdf_iter)
             self.integrator.simulate(self.model, self.states[self.sim_step],
                                      self.states[self.sim_step + 1], self.sim_dt)
             self.sim_time += self.sim_dt
