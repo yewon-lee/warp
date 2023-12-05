@@ -532,7 +532,7 @@ def get_ticks(vars, labels):
     return ticks, ticks_labels, lengths
 
 
-def compare_jacobians(jacobian_ad, jacobian_fd, inputs, outputs, input_names, output_names, jacobian_name: str = "", max_fd_dims_per_var: int = 500, max_outputs_per_var: int = 500, ad_in=None, ad_out=None, atol: float = 0.1, rtol: float = 0.1, plot_jac_on_fail: bool = False, tabulate_errors: bool = True):
+def compare_jacobians(jacobian_ad, jacobian_fd, inputs, outputs, input_names, output_names, jacobian_name: str = "", max_fd_dims_per_var: int = 500, max_outputs_per_var: int = 500, ad_in=None, ad_out=None, atol: float = 0.1, rtol: float = 0.1, plot_jac_on_fail: bool = False, always_plot_jac: bool = False, tabulate_errors: bool = True):
     """
     Compare two Jacobians, one computed analytically and one computed using finite differences.
     Returns a boolean indicating whether the two Jacobians close enough w.r.t. atol and rtol, and a dictionary of accuracy statistics.
@@ -704,7 +704,7 @@ def compare_jacobians(jacobian_ad, jacobian_fd, inputs, outputs, input_names, ou
         except ImportError:
             print("Install tabulate via `pip install tabulate` to print errors")
 
-    if not result and plot_jac_on_fail:
+    if always_plot_jac or not result and plot_jac_on_fail:
         plot_jacobian_comparison(
             jacobian_ad, jacobian_fd,
             f"{jacobian_name} Jacobian",
@@ -715,7 +715,7 @@ def compare_jacobians(jacobian_ad, jacobian_fd, inputs, outputs, input_names, ou
     return result, stats
 
 
-def check_kernel_jacobian(kernel: Callable, dim: Tuple[int], inputs: list, outputs: list, eps: float = 1e-4, max_fd_dims_per_var: int = 500, max_outputs_per_var: int = 500, atol: float = 0.1, rtol: float = 0.1, plot_jac_on_fail: bool = False, tabulate_errors: bool = True, warn_about_missing_requires_grad: bool = True):
+def check_kernel_jacobian(kernel: Callable, dim: Tuple[int], inputs: list, outputs: list, eps: float = 1e-4, max_fd_dims_per_var: int = 500, max_outputs_per_var: int = 500, atol: float = 0.1, rtol: float = 0.1, plot_jac_on_fail: bool = False, always_plot_jac: bool = False, tabulate_errors: bool = True, warn_about_missing_requires_grad: bool = True):
     """
     Checks that the Jacobian of the Warp kernel is correct by comparing it to the
     numerical Jacobian computed using finite differences.
@@ -757,7 +757,7 @@ def check_kernel_jacobian(kernel: Callable, dim: Tuple[int], inputs: list, outpu
                              jacobian_name=kernel.key, input_names=input_names, output_names=output_names,
                              atol=atol, rtol=rtol,
                              max_outputs_per_var=max_outputs_per_var, max_fd_dims_per_var=max_fd_dims_per_var,
-                             tabulate_errors=tabulate_errors, plot_jac_on_fail=plot_jac_on_fail)
+                             tabulate_errors=tabulate_errors, plot_jac_on_fail=plot_jac_on_fail, always_plot_jac=always_plot_jac)
 
 
 def check_tape_jacobians(tape: wp.Tape, inputs: list, outputs: list, input_names: list, output_names: list, eps: float = 1e-4, max_fd_dims_per_var: int = 500, max_outputs_per_var: int = 500, atol: float = 0.1, rtol: float = 0.1, plot_jac_on_fail: bool = True, tabulate_errors: bool = True):
@@ -1518,7 +1518,7 @@ def check_tape_safety(function: Callable, inputs: list, outputs: list = None, to
         return True
 
 
-def plot_state_gradients(states: list, figure_name: str = "state_grads.html", blacklist_vars=set(["body_q_temp", "body_qd_temp"])):
+def plot_state_gradients(states: list, figure_name: str = "state_grads.html", blacklist_vars=set(["body_q_temp", "body_qd_temp"]), title: str = None):
     from plotly.subplots import make_subplots
     import plotly.graph_objects as go
 
@@ -1536,6 +1536,8 @@ def plot_state_gradients(states: list, figure_name: str = "state_grads.html", bl
     ]
 
     fig = make_subplots(cols=2, subplot_titles=["Value Absolute Maximum", "Gradient Absolute Maximum"])
+    if title is not None:
+        fig.update_layout(title_text=title, title_x=0.5)
     absmax = {}
     for i, state in enumerate(states):
         for key, value in state.__dict__.items():
@@ -1565,7 +1567,7 @@ def plot_state_gradients(states: list, figure_name: str = "state_grads.html", bl
             y=val_series,
             name=key,
             legendgroup=key,
-            line=dict(color=color)),
+            line=dict(color=color),),
             row=1,
             col=1)
         fig.add_trace(go.Scatter(
@@ -1578,5 +1580,7 @@ def plot_state_gradients(states: list, figure_name: str = "state_grads.html", bl
             row=1,
             col=2)
     fig.update_yaxes(type="log")
+    fig['layout']['xaxis']['title'] = "State"
+    fig['layout']['xaxis2']['title'] = "State"
 
     fig.write_html(figure_name, auto_open=True)
