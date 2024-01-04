@@ -28,9 +28,12 @@ def _usd_set_xform(xform, pos: tuple, rot: tuple, scale: tuple, time):
 
     xform_ops = xform.GetOrderedXformOps()
 
-    xform_ops[0].Set(Gf.Vec3d(float(pos[0]), float(pos[1]), float(pos[2])), time)
-    xform_ops[1].Set(Gf.Quatf(float(rot[3]), float(rot[0]), float(rot[1]), float(rot[2])), time)
-    xform_ops[2].Set(Gf.Vec3d(float(scale[0]), float(scale[1]), float(scale[2])), time)
+    if pos is not None:
+        xform_ops[0].Set(Gf.Vec3d(float(pos[0]), float(pos[1]), float(pos[2])), time)
+    if rot is not None:
+        xform_ops[1].Set(Gf.Quatf(float(rot[3]), float(rot[0]), float(rot[1]), float(rot[2])), time)
+    if scale is not None:
+        xform_ops[2].Set(Gf.Vec3d(float(scale[0]), float(scale[1]), float(scale[2])), time)
 
 
 # transforms a cylinder such that it connects the two points pos0, pos1
@@ -53,7 +56,7 @@ def _compute_segment_xform(pos0, pos1):
 class UsdRenderer:
     """A USD renderer"""
 
-    def __init__(self, stage, up_axis="y", fps=60, scaling=1.0):
+    def __init__(self, stage, up_axis="Y", fps=60, scaling=1.0):
         """Construct a UsdRenderer object
 
         Args:
@@ -72,7 +75,7 @@ class UsdRenderer:
             self.stage = stage
         else:
             print("Failed to create stage in renderer. Please construct with stage path or stage object.")
-        self.up_axis = up_axis
+        self.up_axis = up_axis.upper()
         self.fps = float(fps)
         self.time = 0.0
 
@@ -97,11 +100,11 @@ class UsdRenderer:
         self.stage.SetEndTimeCode(0.0)
         self.stage.SetTimeCodesPerSecond(self.fps)
 
-        if up_axis == "x":
+        if up_axis == "X":
             UsdGeom.SetStageUpAxis(self.stage, UsdGeom.Tokens.x)
-        elif up_axis == "y":
+        elif up_axis == "Y":
             UsdGeom.SetStageUpAxis(self.stage, UsdGeom.Tokens.y)
-        elif up_axis == "z":
+        elif up_axis == "Z":
             UsdGeom.SetStageUpAxis(self.stage, UsdGeom.Tokens.z)
 
         # add default lights
@@ -155,7 +158,11 @@ class UsdRenderer:
         rot: tuple,
         scale: tuple = (1.0, 1.0, 1.0),
         color: tuple = (1.0, 1.0, 1.0),
+        custom_index: int = -1,
+        visible: bool = True,
     ):
+        if not visible:
+            return
         sdf_path = self._resolve_path(name, body)
         instance = self._shape_constructors[shape.name].Define(self.stage, sdf_path)
         instance.GetPrim().GetReferences().AddInternalReference(shape)
@@ -234,13 +241,13 @@ class UsdRenderer:
         mesh = UsdGeom.Mesh.Define(self.stage, self.root.GetPath().AppendChild("ground"))
         mesh.CreateDoubleSidedAttr().Set(True)
 
-        if self.up_axis == "x":
+        if self.up_axis == "X":
             points = ((0.0, -size, -size), (0.0, size, -size), (0.0, size, size), (0.0, -size, size))
             normals = ((1.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 0.0, 0.0))
-        elif self.up_axis == "y":
+        elif self.up_axis == "Y":
             points = ((-size, 0.0, -size), (size, 0.0, -size), (size, 0.0, size), (-size, 0.0, size))
             normals = ((0.0, 1.0, 0.0), (0.0, 1.0, 0.0), (0.0, 1.0, 0.0), (0.0, 1.0, 0.0))
-        elif self.up_axis == "z":
+        elif self.up_axis == "Z":
             points = ((-size, -size, 0.0), (size, -size, 0.0), (size, size, 0.0), (-size, size, 0.0))
             normals = ((0.0, 0.0, 1.0), (0.0, 0.0, 1.0), (0.0, 0.0, 1.0), (0.0, 0.0, 1.0))
         counts = (4,)
@@ -285,7 +292,7 @@ class UsdRenderer:
         self._shape_constructors[name] = UsdGeom.Sphere
 
         if not is_template:
-            _usd_set_xform(sphere, pos, rot, (1.0, 1.0, 1.0), 0.0)
+            _usd_set_xform(sphere, pos, rot, (1.0, 1.0, 1.0), self.time)
 
         return prim_path
 
@@ -334,7 +341,7 @@ class UsdRenderer:
         self._shape_constructors[name] = UsdGeom.Capsule
 
         if not is_template:
-            _usd_set_xform(capsule, pos, rot, (1.0, 1.0, 1.0), 0.0)
+            _usd_set_xform(capsule, pos, rot, (1.0, 1.0, 1.0), self.time)
 
         return prim_path
 
@@ -383,7 +390,7 @@ class UsdRenderer:
         self._shape_constructors[name] = UsdGeom.Cylinder
 
         if not is_template:
-            _usd_set_xform(cylinder, pos, rot, (1.0, 1.0, 1.0), 0.0)
+            _usd_set_xform(cylinder, pos, rot, (1.0, 1.0, 1.0), self.time)
 
         return prim_path
 
@@ -432,7 +439,7 @@ class UsdRenderer:
         self._shape_constructors[name] = UsdGeom.Cone
 
         if not is_template:
-            _usd_set_xform(cone, pos, rot, (1.0, 1.0, 1.0), 0.0)
+            _usd_set_xform(cone, pos, rot, (1.0, 1.0, 1.0), self.time)
 
         return prim_path
 
@@ -469,7 +476,7 @@ class UsdRenderer:
         self._shape_custom_scale[name] = extents
 
         if not is_template:
-            _usd_set_xform(cube, pos, rot, extents, 0.0)
+            _usd_set_xform(cube, pos, rot, extents, self.time)
 
         return prim_path
 

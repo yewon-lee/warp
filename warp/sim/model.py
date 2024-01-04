@@ -113,8 +113,8 @@ class JointAxis:
     def __init__(
         self,
         axis,
-        limit_lower=-np.inf,
-        limit_upper=np.inf,
+        limit_lower=-math.inf,
+        limit_upper=math.inf,
         limit_ke=100.0,
         limit_kd=10.0,
         target=None,
@@ -133,7 +133,7 @@ class JointAxis:
             self.target_kd = axis.target_kd
             self.mode = axis.mode
         else:
-            self.axis = np.array(wp.normalize(np.array(axis, dtype=np.float32)))
+            self.axis = wp.normalize(wp.vec3(axis))
             self.limit_lower = limit_lower
             self.limit_upper = limit_upper
             self.limit_ke = limit_ke
@@ -159,7 +159,7 @@ class SDF:
         mass (float): The total mass of the SDF
         com (Vec3): The center of mass of the SDF
     """
-    def __init__(self, volume=None, I=np.eye(3, dtype=np.float32), mass=1.0, com=np.array((0.0, 0.0, 0.0))):
+    def __init__(self, volume=None, I=wp.mat33(np.eye(3)), mass=1.0, com=wp.vec3()):
         self.volume = volume
         self.I = I
         self.mass = mass
@@ -234,9 +234,9 @@ class Mesh:
         if compute_inertia:
             self.mass, self.com, self.I, _ = compute_mesh_inertia(1.0, vertices, indices, is_solid=is_solid)
         else:
-            self.I = np.eye(3, dtype=np.float32)
+            self.I = wp.mat33(np.eye(3))
             self.mass = 1.0
-            self.com = np.array((0.0, 0.0, 0.0))
+            self.com = wp.vec3()
 
     def remesh(self, recompute_inertia=True, **remeshing_kwargs):
         self.vertices, self.indices = wp.sim.remesh(self.vertices, self.indices.reshape(-1, 3), **remeshing_kwargs)
@@ -343,9 +343,15 @@ class State:
         return arrays
 
 
+class Control:
+    def __init__(self):
+        self.joint_act = None
+        self.tet_activations = None
+
+
 def compute_shape_mass(type, scale, src, density, is_solid, thickness):
     if density == 0.0 or type == GEO_PLANE:  # zero density means fixed
-        return 0.0, np.zeros(3), np.zeros((3, 3))
+        return 0.0, wp.vec3(), wp.mat33()
 
     if type == GEO_SPHERE:
         solid = compute_sphere_inertia(density, scale[0])
@@ -355,7 +361,7 @@ def compute_shape_mass(type, scale, src, density, is_solid, thickness):
             hollow = compute_sphere_inertia(density, scale[0] - thickness)
             return solid[0] - hollow[0], solid[1], solid[2] - hollow[2]
     elif type == GEO_BOX:
-        w, h, d = np.array(scale[:3]) * 2.0
+        w, h, d = scale * 2.0
         solid = compute_box_inertia(density, w, h, d)
         if is_solid:
             return solid
@@ -390,13 +396,12 @@ def compute_shape_mass(type, scale, src, density, is_solid, thickness):
         if src.has_inertia and src.mass > 0.0 and src.is_solid == is_solid:
             m, c, I = src.mass, src.com, src.I
 
-            s = np.array(scale[:3])
-            sx, sy, sz = s
+            sx, sy, sz = scale
 
             mass_ratio = sx * sy * sz * density
             m_new = m * mass_ratio
 
-            c_new = c * s
+            c_new = wp.cw_mul(c, scale)
 
             Ixx = I[0, 0] * (sy**2 + sz**2) / 2 * mass_ratio
             Iyy = I[1, 1] * (sx**2 + sz**2) / 2 * mass_ratio
@@ -405,12 +410,12 @@ def compute_shape_mass(type, scale, src, density, is_solid, thickness):
             Ixz = I[0, 2] * sx * sz * mass_ratio
             Iyz = I[1, 2] * sy * sz * mass_ratio
 
-            I_new = np.array([[Ixx, Ixy, Ixz], [Ixy, Iyy, Iyz], [Ixz, Iyz, Izz]])
+            I_new = wp.mat33([[Ixx, Ixy, Ixz], [Ixy, Iyy, Iyz], [Ixz, Iyz, Izz]])
 
             return m_new, c_new, I_new
         elif type == GEO_MESH:
             # fall back to computing inertia from mesh geometry
-            vertices = np.array(src.vertices) * np.array(scale[:3])
+            vertices = np.array(src.vertices) * np.array(scale)
             m, c, I, vol = compute_mesh_inertia(density, vertices, src.indices, is_solid, thickness)
             return m, c, I
     raise ValueError("Unsupported shape type: {}".format(type))
@@ -443,6 +448,7 @@ class Model:
         particle_max_velocity (float): Maximum particle velocity (to prevent instability)
 
         shape_transform (array): Rigid shape transforms, shape [shape_count, 7], float
+        shape_visible (array): Rigid shape visibility, shape [shape_count], bool
         shape_body (array): Rigid shape body index, shape [shape_count], int
         body_shapes (dict): Mapping from body index to list of attached shape indices
         shape_materials (ModelShapeMaterials): Rigid shape contact materials, shape [shape_count], float
@@ -495,7 +501,7 @@ class Model:
         joint_X_p (array): Joint transform in parent frame, shape [joint_count, 7], float
         joint_X_c (array): Joint mass frame in child frame, shape [joint_count, 7], float
         joint_axis (array): Joint axis in child frame, shape [joint_axis_count, 3], float
-        joint_armature (array): Armature for each joint, shape [joint_count], float
+        joint_armature (array): Armature for each joint axis (only used by FeatherstoneIntegrator), shape [joint_count], float
         joint_target (array): Joint target position/velocity (depending on joint axis mode), shape [joint_axis_count], float
         joint_target_ke (array): Joint stiffness, shape [joint_axis_count], float
         joint_target_kd (array): Joint damping, shape [joint_axis_count], float
@@ -582,6 +588,7 @@ class Model:
 
         self.shape_transform = None
         self.shape_body = None
+        self.shape_visible = None
         self.body_shapes = {}
         self.shape_materials = ModelShapeMaterials()
         self.shape_geo = ModelShapeGeometry()
@@ -696,8 +703,9 @@ class Model:
         self.device = wp.get_device(device)
         self.integrator = integrator
 
-        # list of functions to call to augment the state
-        self.state_augment_fns: List[Callable[[State]]] = []
+        # list of functions to call to augment the state and model
+        self.augment_state_fns: List[Callable[[State]]] = []
+        self.augment_model_fns: List[Callable[[Model]]] = []
 
     def state(self, requires_grad=None) -> State:
         """Returns a state object for the model
@@ -755,10 +763,18 @@ class Model:
 
         if self.integrator is not None and hasattr(self.integrator, "augment_state"):
             self.integrator.augment_state(self, s)
-        for state_augment_fn in self.state_augment_fns:
+        for state_augment_fn in self.augment_state_fns:
             state_augment_fn(self, s)
 
         return s
+
+    def control(self, requires_grad=None) -> Control:
+        c = Control()
+        if requires_grad is None:
+            requires_grad = self.requires_grad
+        c.joint_act = wp.zeros_like(self.joint_act, requires_grad=requires_grad)
+        c.tet_activations = wp.zeros_like(self.tet_activations, requires_grad=requires_grad)
+        return c
 
     def _allocate_soft_contacts(self, target, count, requires_grad=False):
         target.soft_contact_count = wp.zeros(1, dtype=wp.int32, device=self.device)
@@ -1078,6 +1094,7 @@ class ModelBuilder:
         self.shape_transform = []
         # maps from shape index to body index
         self.shape_body = []
+        self.shape_visible = []
         self.shape_geo_type = []
         self.shape_geo_scale = []
         self.shape_geo_src = []
@@ -1187,8 +1204,8 @@ class ModelBuilder:
         self.joint_coord_count = 0
         self.joint_axis_total_count = 0
 
-        self.up_vector = np.array(up_vector)
-        self.up_axis = np.argmax(np.abs(up_vector))
+        self.up_vector = wp.vec3(up_vector)
+        self.up_axis = wp.vec3(np.argmax(np.abs(up_vector)))
         self.gravity = gravity
         # indicates whether a ground plane has been created
         self._ground_created = False
@@ -1221,6 +1238,9 @@ class ModelBuilder:
         # number of rigid contact points to allocate in the model during self.finalize() per environment
         # if setting is None, the number of worst-case number of contacts will be calculated in self.finalize()
         self.num_rigid_contacts_per_env = None
+
+        # custom functions to exectue on the model after this ModelBuilder has been finalized
+        self.augment_model_fns = []
 
     @property
     def shape_count(self):
@@ -1412,6 +1432,7 @@ class ModelBuilder:
             "joint_target_kd",
             "joint_linear_compliance",
             "joint_angular_compliance",
+            "shape_visible",
             "shape_geo_type",
             "shape_geo_scale",
             "shape_geo_src",
@@ -1460,8 +1481,8 @@ class ModelBuilder:
         self,
         origin: Transform = wp.transform(),
         armature: float = 0.0,
-        com: Vec3 = np.zeros(3),
-        I_m: Mat33 = np.zeros((3, 3)),
+        com: Vec3 = wp.vec3(),
+        I_m: Mat33 = wp.mat33(),
         m: float = 0.0,
         name: str = None,
     ) -> int:
@@ -1486,7 +1507,7 @@ class ModelBuilder:
         body_id = len(self.body_mass)
 
         # body data
-        inertia = I_m + np.eye(3) * armature
+        inertia = I_m + wp.mat33(np.eye(3)) * armature
         self.body_inertia.append(inertia)
         self.body_mass.append(m)
         self.body_com.append(com)
@@ -1496,8 +1517,8 @@ class ModelBuilder:
         else:
             self.body_inv_mass.append(0.0)
 
-        if inertia.any():
-            self.body_inv_inertia.append(np.linalg.inv(inertia))
+        if any(x for x in inertia):
+            self.body_inv_inertia.append(wp.inverse(inertia))
         else:
             self.body_inv_inertia.append(inertia)
 
@@ -1520,6 +1541,7 @@ class ModelBuilder:
         child_xform: wp.transform = wp.transform(),
         linear_compliance: float = 0.0,
         angular_compliance: float = 0.0,
+        armature: float = 1e-2,
         collision_filter_parent: bool = True,
         enabled: bool = True,
     ) -> int:
@@ -1537,6 +1559,7 @@ class ModelBuilder:
             child_xform (:ref:`transform <transform>`): The transform of the joint in the child body's local frame
             linear_compliance: The linear compliance of the joint
             angular_compliance: The angular compliance of the joint
+            armature (float): Artificial inertia added around the joint axis (only considered by FeatherstoneIntegrator)
             collision_filter_parent: Whether to filter collisions between shapes of the parent and child bodies
             enabled: Whether the joint is enabled
 
@@ -1553,8 +1576,8 @@ class ModelBuilder:
         else:
             self.joint_parents[child].append(parent)
         self.joint_child.append(child)
-        self.joint_X_p.append([*parent_xform])
-        self.joint_X_c.append([*child_xform])
+        self.joint_X_p.append(wp.transform(parent_xform))
+        self.joint_X_c.append(wp.transform(child_xform))
         self.joint_name.append(name or f"joint {self.joint_count}")
         self.joint_axis_start.append(len(self.joint_axis))
         self.joint_axis_dim.append((len(linear_axes), len(angular_axes)))
@@ -1580,8 +1603,6 @@ class ModelBuilder:
                 self.joint_limit_upper.append(dim.limit_upper)
             else:
                 self.joint_limit_upper.append(1e6)
-            # self.joint_limit_lower.append(dim.limit_lower)
-            # self.joint_limit_upper.append(dim.limit_upper)
 
         for dim in linear_axes:
             add_axis_dim(dim)
@@ -1619,6 +1640,7 @@ class ModelBuilder:
         for i in range(dof_count):
             self.joint_qd.append(0.0)
             self.joint_act.append(0.0)
+            self.joint_armature.append(armature)
 
         if joint_type == JOINT_FREE or joint_type == JOINT_DISTANCE or joint_type == JOINT_BALL:
             # ensure that a valid quaternion is used for the angular dofs
@@ -1641,9 +1663,9 @@ class ModelBuilder:
         self,
         parent: int,
         child: int,
-        parent_xform: wp.transform,
-        child_xform: wp.transform,
-        axis: Vec3,
+        parent_xform: wp.transform = wp.transform(),
+        child_xform: wp.transform = wp.transform(),
+        axis: Vec3 = (1.0, 0.0, 0.0),
         target: float = 0.0,
         target_ke: float = 0.0,
         target_kd: float = 0.0,
@@ -1712,9 +1734,9 @@ class ModelBuilder:
         self,
         parent: int,
         child: int,
-        parent_xform: wp.transform,
-        child_xform: wp.transform,
-        axis: Vec3,
+        parent_xform: wp.transform = wp.transform(),
+        child_xform: wp.transform = wp.transform(),
+        axis: Vec3 = (1.0, 0.0, 0.0),
         target: float = 0.0,
         target_ke: float = 0.0,
         target_kd: float = 0.0,
@@ -1787,6 +1809,7 @@ class ModelBuilder:
         child_xform: wp.transform = wp.transform(),
         linear_compliance: float = 0.0,
         angular_compliance: float = 0.0,
+        armature: float = 1e-2,
         name: str = None,
         collision_filter_parent: bool = True,
         enabled: bool = True,
@@ -1800,6 +1823,7 @@ class ModelBuilder:
             child_xform (:ref:`transform <transform>`): The transform of the joint in the child body's local frame
             linear_compliance: The linear compliance of the joint
             angular_compliance: The angular compliance of the joint
+            armature (float): Artificial inertia added around the joint axis (only considered by FeatherstoneIntegrator)
             name: The name of the joint
             collision_filter_parent: Whether to filter collisions between shapes of the parent and child bodies
             enabled: Whether the joint is enabled
@@ -1816,6 +1840,7 @@ class ModelBuilder:
             child_xform=child_xform,
             linear_compliance=linear_compliance,
             angular_compliance=angular_compliance,
+            armature=armature,
             name=name,
             collision_filter_parent=collision_filter_parent,
             enabled=enabled,
@@ -1869,6 +1894,7 @@ class ModelBuilder:
         child: int,
         parent_xform: wp.transform = wp.transform(),
         child_xform: wp.transform = wp.transform(),
+        armature: float = 0.0,
         parent: int = -1,
         name: str = None,
         collision_filter_parent: bool = True,
@@ -1881,6 +1907,7 @@ class ModelBuilder:
             child: The index of the child body
             parent_xform (:ref:`transform <transform>`): The transform of the joint in the parent body's local frame
             child_xform (:ref:`transform <transform>`): The transform of the joint in the child body's local frame
+            armature (float): Artificial inertia added around the joint axis (only considered by FeatherstoneIntegrator)
             parent: The index of the parent body (-1 by default to use the world frame, e.g. to make the child body and its children a floating-base mechanism)
             name: The name of the joint
             collision_filter_parent: Whether to filter collisions between shapes of the parent and child bodies
@@ -1896,6 +1923,7 @@ class ModelBuilder:
             child,
             parent_xform=parent_xform,
             child_xform=child_xform,
+            armature=armature,
             name=name,
             collision_filter_parent=collision_filter_parent,
             enabled=enabled,
@@ -2164,10 +2192,10 @@ class ModelBuilder:
 
             data = {
                 "type": self.joint_type[i],
-                # 'armature': self.joint_armature[i],
                 "q": self.joint_q[q_start : q_start + q_dim],
                 "qd": self.joint_qd[qd_start : qd_start + qd_dim],
                 "act": self.joint_act[qd_start : qd_start + qd_dim],
+                "armature": self.joint_armature[qd_start : qd_start + qd_dim],
                 "q_start": q_start,
                 "qd_start": qd_start,
                 "linear_compliance": self.joint_linear_compliance[i],
@@ -2327,6 +2355,7 @@ class ModelBuilder:
         self.joint_enabled.clear()
         self.joint_linear_compliance.clear()
         self.joint_angular_compliance.clear()
+        self.joint_armature.clear()
         self.joint_X_p.clear()
         self.joint_X_c.clear()
         self.joint_axis.clear()
@@ -2351,6 +2380,7 @@ class ModelBuilder:
             self.joint_q.extend(joint["q"])
             self.joint_qd.extend(joint["qd"])
             self.joint_act.extend(joint["act"])
+            self.joint_armature.extend(joint["armature"])
             self.joint_enabled.append(joint["enabled"])
             self.joint_linear_compliance.append(joint["linear_compliance"])
             self.joint_angular_compliance.append(joint["angular_compliance"])
@@ -2419,6 +2449,7 @@ class ModelBuilder:
         restitution: float = default_shape_restitution,
         thickness: float = 0.0,
         has_ground_collision: bool = False,
+        is_visible: bool = True,
     ):
         """
         Adds a plane collision shape.
@@ -2439,6 +2470,7 @@ class ModelBuilder:
             restitution: The coefficient of restitution
             thickness: The thickness of the plane (0 by default) for collision handling
             has_ground_collision: If True, the mesh will collide with the ground plane if `Model.ground` is True
+            is_visible: Whether the plane is visible
 
         Returns:
             The index of the added shape
@@ -2457,7 +2489,7 @@ class ModelBuilder:
                 angle = np.arcsin(np.linalg.norm(c))
                 axis = c / np.linalg.norm(c)
                 rot = wp.quat_from_axis_angle(axis, angle)
-        scale = (width, length, 0.0)
+        scale = wp.vec3(width, length, 0.0)
 
         return self._add_shape(
             body,
@@ -2474,6 +2506,7 @@ class ModelBuilder:
             restitution,
             thickness,
             has_ground_collision=has_ground_collision,
+            is_visible=is_visible,
         )
 
     def add_shape_sphere(
@@ -2492,6 +2525,7 @@ class ModelBuilder:
         thickness: float = default_geo_thickness,
         has_ground_collision: bool = True,
         collision_group: int = -1,
+        is_visible: bool = True,
     ):
         """Adds a sphere collision shape to a body.
 
@@ -2510,6 +2544,7 @@ class ModelBuilder:
             thickness: Thickness to use for computing inertia of a hollow sphere, and for collision handling
             has_ground_collision: If True, the mesh will collide with the ground plane if `Model.ground` is True
             collision_group: The collision group of the shape
+            is_visible: Whether the sphere is visible
 
         Returns:
             The index of the added shape
@@ -2518,10 +2553,10 @@ class ModelBuilder:
 
         return self._add_shape(
             body,
-            pos,
-            rot,
+            wp.vec3(pos),
+            wp.quat(rot),
             GEO_SPHERE,
-            (radius, 0.0, 0.0, 0.0),
+            wp.vec3(radius, 0.0, 0.0),
             None,
             density,
             ke,
@@ -2533,6 +2568,7 @@ class ModelBuilder:
             is_solid,
             has_ground_collision=has_ground_collision,
             collision_group=collision_group,
+            is_visible=is_visible,
         )
 
     def add_shape_box(
@@ -2553,6 +2589,7 @@ class ModelBuilder:
         thickness: float = default_geo_thickness,
         has_ground_collision: bool = True,
         collision_group: int = -1,
+        is_visible: bool = True,
     ):
         """Adds a box collision shape to a body.
 
@@ -2573,6 +2610,7 @@ class ModelBuilder:
             thickness: Thickness to use for computing inertia of a hollow box, and for collision handling
             has_ground_collision: If True, the mesh will collide with the ground plane if `Model.ground` is True
             collision_group: The collision group of the shape
+            is_visible: Whether the box is visible
 
         Returns:
             The index of the added shape
@@ -2581,10 +2619,10 @@ class ModelBuilder:
 
         return self._add_shape(
             body,
-            pos,
-            rot,
+            wp.vec3(pos),
+            wp.quat(rot),
             GEO_BOX,
-            (hx, hy, hz, 0.0),
+            wp.vec3(hx, hy, hz),
             None,
             density,
             ke,
@@ -2596,6 +2634,7 @@ class ModelBuilder:
             is_solid,
             has_ground_collision=has_ground_collision,
             collision_group=collision_group,
+            is_visible=is_visible,
         )
 
     def add_shape_capsule(
@@ -2616,6 +2655,7 @@ class ModelBuilder:
         thickness: float = default_geo_thickness,
         has_ground_collision: bool = True,
         collision_group: int = -1,
+        is_visible: bool = True,
     ):
         """Adds a capsule collision shape to a body.
 
@@ -2636,25 +2676,26 @@ class ModelBuilder:
             thickness: Thickness to use for computing inertia of a hollow capsule, and for collision handling
             has_ground_collision: If True, the mesh will collide with the ground plane if `Model.ground` is True
             collision_group: The collision group of the shape
+            is_visible: Whether the capsule is visible
 
         Returns:
             The index of the added shape
 
         """
 
-        q = rot
+        q = wp.quat(rot)
         sqh = math.sqrt(0.5)
         if up_axis == 0:
-            q = wp.mul(rot, wp.quat(0.0, 0.0, -sqh, sqh))
+            q = wp.mul(q, wp.quat(0.0, 0.0, -sqh, sqh))
         elif up_axis == 2:
-            q = wp.mul(rot, wp.quat(sqh, 0.0, 0.0, sqh))
+            q = wp.mul(q, wp.quat(sqh, 0.0, 0.0, sqh))
 
         return self._add_shape(
             body,
-            pos,
-            q,
+            wp.vec3(pos),
+            wp.quat(q),
             GEO_CAPSULE,
-            (radius, half_height, 0.0, 0.0),
+            wp.vec3(radius, half_height, 0.0),
             None,
             density,
             ke,
@@ -2666,6 +2707,7 @@ class ModelBuilder:
             is_solid,
             has_ground_collision=has_ground_collision,
             collision_group=collision_group,
+            is_visible=is_visible,
         )
 
     def add_shape_cylinder(
@@ -2686,6 +2728,7 @@ class ModelBuilder:
         thickness: float = default_geo_thickness,
         has_ground_collision: bool = True,
         collision_group: int = -1,
+        is_visible: bool = True,
     ):
         """Adds a cylinder collision shape to a body.
 
@@ -2706,6 +2749,7 @@ class ModelBuilder:
             thickness: Thickness to use for computing inertia of a hollow cylinder, and for collision handling
             has_ground_collision: If True, the mesh will collide with the ground plane if `Model.ground` is True
             collision_group: The collision group of the shape
+            is_visible: Whether the cylinder is visible
 
         Returns:
             The index of the added shape
@@ -2721,10 +2765,10 @@ class ModelBuilder:
 
         return self._add_shape(
             body,
-            pos,
-            q,
+            wp.vec3(pos),
+            wp.quat(q),
             GEO_CYLINDER,
-            (radius, half_height, 0.0, 0.0),
+            wp.vec3(radius, half_height, 0.0),
             None,
             density,
             ke,
@@ -2736,6 +2780,7 @@ class ModelBuilder:
             is_solid,
             has_ground_collision=has_ground_collision,
             collision_group=collision_group,
+            is_visible=is_visible,
         )
 
     def add_shape_cone(
@@ -2756,6 +2801,7 @@ class ModelBuilder:
         thickness: float = default_geo_thickness,
         has_ground_collision: bool = True,
         collision_group: int = -1,
+        is_visible: bool = True,
     ):
         """Adds a cone collision shape to a body.
 
@@ -2776,6 +2822,7 @@ class ModelBuilder:
             thickness: Thickness to use for computing inertia of a hollow cone, and for collision handling
             has_ground_collision: If True, the mesh will collide with the ground plane if `Model.ground` is True
             collision_group: The collision group of the shape
+            is_visible: Whether the cone is visible
 
         Returns:
             The index of the added shape
@@ -2791,10 +2838,10 @@ class ModelBuilder:
 
         return self._add_shape(
             body,
-            pos,
-            q,
+            wp.vec3(pos),
+            wp.quat(q),
             GEO_CONE,
-            (radius, half_height, 0.0, 0.0),
+            wp.vec3(radius, half_height, 0.0),
             None,
             density,
             ke,
@@ -2806,15 +2853,16 @@ class ModelBuilder:
             is_solid,
             has_ground_collision=has_ground_collision,
             collision_group=collision_group,
+            is_visible=is_visible,
         )
 
     def add_shape_mesh(
         self,
         body: int,
-        pos: Vec3 = (0.0, 0.0, 0.0),
-        rot: Quat = (0.0, 0.0, 0.0, 1.0),
+        pos: Vec3 = wp.vec3(0.0, 0.0, 0.0),
+        rot: Quat = wp.quat(0.0, 0.0, 0.0, 1.0),
         mesh: Mesh = None,
-        scale: Vec3 = (1.0, 1.0, 1.0),
+        scale: Vec3 = wp.vec3(1.0, 1.0, 1.0),
         density: float = default_shape_density,
         ke: float = default_shape_ke,
         kd: float = default_shape_kd,
@@ -2825,6 +2873,7 @@ class ModelBuilder:
         thickness: float = default_geo_thickness,
         has_ground_collision: bool = True,
         collision_group: int = -1,
+        is_visible: bool = True,
     ):
         """Adds a triangle mesh collision shape to a body.
 
@@ -2844,6 +2893,7 @@ class ModelBuilder:
             thickness: Thickness to use for computing inertia of a hollow mesh, and for collision handling
             has_ground_collision: If True, the mesh will collide with the ground plane if `Model.ground` is True
             collision_group: The collision group of the shape
+            is_visible: Whether the mesh is visible
 
         Returns:
             The index of the added shape
@@ -2855,7 +2905,7 @@ class ModelBuilder:
             pos,
             rot,
             GEO_MESH,
-            (scale[0], scale[1], scale[2], 0.0),
+            wp.vec3(scale[0], scale[1], scale[2]),
             mesh,
             density,
             ke,
@@ -2867,6 +2917,7 @@ class ModelBuilder:
             is_solid,
             has_ground_collision=has_ground_collision,
             collision_group=collision_group,
+            is_visible=is_visible,
         )
 
     def add_shape_sdf(
@@ -2884,6 +2935,7 @@ class ModelBuilder:
         restitution: float = default_shape_restitution,
         is_solid: bool = True,
         thickness: float = default_geo_thickness,
+        is_visible: bool = True,
     ):
         """Adds SDF collision shape to a body.
 
@@ -2902,6 +2954,7 @@ class ModelBuilder:
             is_solid: If True, the mesh is solid, otherwise it is a hollow surface with the given wall thickness
             thickness: Thickness to use for computing inertia of a hollow mesh, and for collision handling
             has_ground_collision: If True, the mesh will collide with the ground plane if `Model.ground` is True
+            is_visible: Whether the mesh is visible
 
         Returns:
             The index of the added shape
@@ -2909,10 +2962,10 @@ class ModelBuilder:
         """
         return self._add_shape(
             body,
-            pos,
-            rot,
+            wp.vec3(pos),
+            wp.quat(rot),
             GEO_SDF,
-            (scale[0], scale[1], scale[2], 0.0),
+            wp.vec3(scale[0], scale[1], scale[2]),
             sdf,
             density,
             ke,
@@ -2922,6 +2975,7 @@ class ModelBuilder:
             restitution,
             thickness,
             is_solid,
+            is_visible=is_visible,
         )
 
     def _shape_radius(self, type, scale, src):
@@ -2965,6 +3019,7 @@ class ModelBuilder:
         collision_group=-1,
         collision_filter_parent=True,
         has_ground_collision=True,
+        is_visible=True,
     ):
         self.shape_body.append(body)
         shape = self.shape_count
@@ -2976,6 +3031,7 @@ class ModelBuilder:
         else:
             self.body_shapes[body] = [shape]
         self.shape_transform.append(wp.transform(pos, rot))
+        self.shape_visible.append(is_visible)
         self.shape_geo_type.append(type)
         self.shape_geo_scale.append((scale[0], scale[1], scale[2]))
         self.shape_geo_src.append(src)
@@ -3003,7 +3059,7 @@ class ModelBuilder:
 
         (m, c, I) = compute_shape_mass(type, scale, src, density, is_solid, thickness)
 
-        self._update_body_mass(body, m, I, np.array(pos) + c, np.array(rot))
+        self._update_body_mass(body, m, I, pos + c, rot)
         return shape
 
     # particles
@@ -3098,9 +3154,9 @@ class ModelBuilder:
 
         """
         # compute basis for 2D rest pose
-        p = np.array(self.particle_q[i])
-        q = np.array(self.particle_q[j])
-        r = np.array(self.particle_q[k])
+        p = self.particle_q[i]
+        q = self.particle_q[j]
+        r = self.particle_q[k]
 
         qp = q - p
         rp = r - p
@@ -3297,13 +3353,13 @@ class ModelBuilder:
         """
         # compute rest angle
         if rest is None:
-            x1 = np.array(self.particle_q[i])
-            x2 = np.array(self.particle_q[j])
-            x3 = np.array(self.particle_q[k])
-            x4 = np.array(self.particle_q[l])
+            x1 = self.particle_q[i]
+            x2 = self.particle_q[j]
+            x3 = self.particle_q[k]
+            x4 = self.particle_q[l]
 
-            n1 = wp.normalize(np.cross(x3 - x1, x4 - x1))
-            n2 = wp.normalize(np.cross(x4 - x2, x3 - x2))
+            n1 = wp.normalize(wp.cross(x3 - x1, x4 - x1))
+            n2 = wp.normalize(wp.cross(x4 - x2, x3 - x2))
             e = wp.normalize(x4 - x3)
 
             d = np.clip(np.dot(n2, n1), -1.0, 1.0)
@@ -3443,8 +3499,8 @@ class ModelBuilder:
 
         for y in range(0, dim_y + 1):
             for x in range(0, dim_x + 1):
-                g = np.array((x * cell_x, y * cell_y, 0.0))
-                p = np.array(wp.quat_rotate(rot, g)) + pos
+                g = wp.vec3(x * cell_x, y * cell_y, 0.0)
+                p = wp.quat_rotate(rot, g) + pos
                 m = mass
 
                 if x == 0 and fix_left:
@@ -3569,7 +3625,7 @@ class ModelBuilder:
 
         # particles
         for v in vertices:
-            p = np.array(wp.quat_rotate(rot, v * scale)) + pos
+            p = wp.quat_rotate(rot, v * scale) + pos
 
             self.add_particle(p, vel, 0.0)
 
@@ -3642,13 +3698,14 @@ class ModelBuilder:
         radius_mean: float = default_particle_radius,
         radius_std: float = 0.0,
     ):
+        rng = np.random.default_rng()
         for z in range(dim_z):
             for y in range(dim_y):
                 for x in range(dim_x):
-                    v = np.array((x * cell_x, y * cell_y, z * cell_z))
+                    v = wp.vec3(x * cell_x, y * cell_y, z * cell_z)
                     m = mass
 
-                    p = np.array(wp.quat_rotate(rot, v)) + pos + np.random.rand(3) * jitter
+                    p = wp.quat_rotate(rot, v) + pos + wp.vec3(rng.random(3) * jitter)
 
                     if radius_std > 0.0:
                         r = radius_mean + np.random.randn() * radius_std
@@ -3714,7 +3771,7 @@ class ModelBuilder:
         for z in range(dim_z + 1):
             for y in range(dim_y + 1):
                 for x in range(dim_x + 1):
-                    v = np.array((x * cell_x, y * cell_y, z * cell_z))
+                    v = wp.vec3(x * cell_x, y * cell_y, z * cell_z)
                     m = mass
 
                     if fix_left and x == 0:
@@ -3729,7 +3786,7 @@ class ModelBuilder:
                     if fix_bottom and y == 0:
                         m = 0.0
 
-                    p = np.array(wp.quat_rotate(rot, v)) + pos
+                    p = wp.quat_rotate(rot, v) + pos
 
                     self.add_particle(p, vel, m)
 
@@ -3896,8 +3953,8 @@ class ModelBuilder:
         else:
             self.body_inv_mass[i] = 0.0
 
-        if new_inertia.any():
-            self.body_inv_inertia[i] = np.linalg.inv(new_inertia)
+        if any(x for x in new_inertia):
+            self.body_inv_inertia[i] = wp.inverse(new_inertia)
         else:
             self.body_inv_inertia[i] = new_inertia
 
@@ -3983,6 +4040,7 @@ class ModelBuilder:
 
             m.shape_transform = wp.array(self.shape_transform, dtype=wp.transform, requires_grad=requires_grad)
             m.shape_body = wp.array(self.shape_body, dtype=wp.int32)
+            m.shape_visible = wp.array(self.shape_visible, dtype=wp.bool)
             m.body_shapes = self.body_shapes
 
             # build list of ids for geometry sources (meshes, sdfs)
@@ -4102,12 +4160,11 @@ class ModelBuilder:
             m.joint_name = self.joint_name
 
             # dynamics properties
-            # TODO unused joint_armature
             m.joint_armature = wp.array(self.joint_armature, dtype=wp.float32, requires_grad=requires_grad)
             m.joint_target = wp.array(self.joint_target, dtype=wp.float32, requires_grad=requires_grad)
             m.joint_target_ke = wp.array(self.joint_target_ke, dtype=wp.float32, requires_grad=requires_grad)
             m.joint_target_kd = wp.array(self.joint_target_kd, dtype=wp.float32, requires_grad=requires_grad)
-            m.joint_axis_mode = wp.array(self.joint_axis_mode, dtype=wp.uint8)
+            m.joint_axis_mode = wp.array(self.joint_axis_mode, dtype=wp.int32)
             m.joint_act = wp.array(self.joint_act, dtype=wp.float32, requires_grad=requires_grad)
 
             m.joint_limit_lower = wp.array(self.joint_limit_lower, dtype=wp.float32, requires_grad=requires_grad)
@@ -4177,5 +4234,10 @@ class ModelBuilder:
             m.gravity = np.array(self.up_vector) * self.gravity
 
             m.enable_tri_collisions = False
+
+            if integrator is not None and hasattr(integrator, "augment_model"):
+                integrator.augment_model(m)
+            for augment_model_fn in self.augment_model_fns:
+                augment_model_fn(m)
 
             return m

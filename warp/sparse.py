@@ -1,9 +1,9 @@
-from typing import Tuple, Any, Optional, Union, TypeVar, Generic
+from typing import Any, Generic, Optional, Tuple, TypeVar, Union
 
 import warp as wp
 import warp.types
-from warp.types import Matrix, Vector, Rows, Cols, Scalar, Array
 import warp.utils
+from warp.types import Array, Cols, Matrix, Rows, Scalar, Vector
 
 # typing hints
 
@@ -54,7 +54,7 @@ class BsrMatrix(Generic[_BlockType]):
 
     @property
     def shape(self) -> Tuple[int, int]:
-        """Shape of the matrix, i.e. number of rows/columns of blocks times number of rows/columsn per block"""
+        """Shape of the matrix, i.e. number of rows/columns of blocks times number of rows/columns per block"""
         block_shape = self.block_shape
         return (self.nrow * block_shape[0], self.ncol * block_shape[1])
 
@@ -63,7 +63,7 @@ def bsr_matrix_t(dtype: BlockType):
     dtype = wp.types.type_to_warp(dtype)
 
     if not warp.types.type_is_matrix(dtype) and not dtype in warp.types.scalar_types:
-        raise RuntimeError(
+        raise ValueError(
             f"BsrMatrix block type must be either warp matrix or scalar; got {warp.types.type_repr(dtype)}"
         )
 
@@ -193,7 +193,7 @@ def bsr_set_from_triplets(
     elif values.ndim == 3:
         if values.shape[1:] != dest.block_shape:
             raise ValueError(
-                f"Last two dimensions in values array ({values.shape[1:]}) shoudl correspond to matrix block shape {(dest.block_shape)})"
+                f"Last two dimensions in values array ({values.shape[1:]}) should correspond to matrix block shape {(dest.block_shape)})"
             )
 
         if warp.types.type_scalar_type(values.dtype) != dest.scalar_type:
@@ -205,6 +205,9 @@ def bsr_set_from_triplets(
         raise ValueError("Number of dimension for values array should be 1 or 3")
 
     nnz = rows.shape[0]
+    if nnz == 0:
+        bsr_set_zero(dest)
+        return
 
     # Increase dest array sizes if needed
     _bsr_ensure_fits(dest, nnz=nnz)
@@ -263,7 +266,7 @@ def bsr_assign(dest: BsrMatrix[BlockType[Rows, Cols, Scalar]], src: BsrMatrix[Bl
 
 
 def bsr_copy(A: BsrMatrix, scalar_type: Optional[Scalar] = None):
-    """Returns a copy of matrix ``A``, possibly chaning its scalar type.
+    """Returns a copy of matrix ``A``, possibly changing its scalar type.
 
     Args:
        scalar_type: If provided, the returned matrix will use this scalar type instead of the one from `A`.
@@ -651,7 +654,7 @@ class bsr_axpy_work_arrays:
 
 def bsr_axpy(
     x: BsrMatrix[BlockType[Rows, Cols, Scalar]],
-    y: Optional[BsrMatrix[BlockType[Rows, Cols, Scalar]]],
+    y: Optional[BsrMatrix[BlockType[Rows, Cols, Scalar]]] = None,
     alpha: Scalar = 1.0,
     beta: Scalar = 1.0,
     work_arrays: Optional[bsr_axpy_work_arrays] = None,
@@ -671,13 +674,13 @@ def bsr_axpy(
 
     if y is None:
         # If not output matrix is provided, allocate it for convenience
-        y = bsr_zeros(x.nrow, x.ncol, block_type=x.block_type, device=x.values.device)
+        y = bsr_zeros(x.nrow, x.ncol, block_type=x.values.dtype, device=x.values.device)
         beta = 0.0
 
     # Handle easy cases first
     if beta == 0.0 or y.nnz == 0:
         bsr_assign(src=x, dest=y)
-        return bsr_scale(x, alpha=alpha)
+        return bsr_scale(y, alpha=alpha)
 
     if alpha == 0.0 or x.nnz == 0:
         return bsr_scale(y, alpha=beta)
@@ -948,10 +951,14 @@ def bsr_mm(
     if x.scalar_type != y.scalar_type or x.scalar_type != z.scalar_type:
         raise ValueError("Matrices must have the same scalar type")
 
-    if x.block_shape[0] != z.block_shape[0] or y.block_shape[1] != z.block_shape[1]:
-        raise ValueError("Incompatible blocks sizes for matrix multiplication")
+    if (
+        x.block_shape[0] != z.block_shape[0]
+        or y.block_shape[1] != z.block_shape[1]
+        or x.block_shape[1] != y.block_shape[0]
+    ):
+        raise ValueError("Incompatible block sizes for matrix multiplication")
 
-    if x.nrow != z.nrow or z.ncol != y.ncol:
+    if x.nrow != z.nrow or z.ncol != y.ncol or x.ncol != y.nrow:
         raise ValueError("Incompatible number of rows/columns for matrix multiplication")
 
     device = z.values.device
@@ -985,7 +992,7 @@ def bsr_mm(
     # Get back total counts on host
     if device.is_cuda:
         wp.copy(dest=work_arrays._pinned_count_buffer, src=work_arrays._mm_row_counts, src_offset=z.nrow, count=1)
-        wp.synchronize_stream(wp.get_stream())
+        wp.synchronize_stream(wp.get_stream(device))
         mm_nnz = int(work_arrays._pinned_count_buffer.numpy()[0])
     else:
         mm_nnz = int(work_arrays._mm_row_counts.numpy()[z.nrow])
@@ -1164,7 +1171,7 @@ def bsr_mv(
         beta = A.scalar_type(beta)
 
     if A.values.device != x.device or A.values.device != y.device:
-        raise ValueError("A, x and y must reide on the same device")
+        raise ValueError("A, x and y must reside on the same device")
 
     if x.shape[0] != A.ncol:
         raise ValueError("Number of columns of A must match number of rows of x")
@@ -1184,7 +1191,7 @@ def bsr_mv(
         wp.copy(dest=work_buffer, src=y, count=y.size)
         x = work_buffer
 
-    # Promote scalar vectors to length-1 vecs
+    # Promote scalar vectors to length-1 vecs and conversely
     if warp.types.type_is_matrix(A.values.dtype):
         if A.block_shape[0] == 1:
             if y.dtype == A.scalar_type:
@@ -1192,6 +1199,13 @@ def bsr_mv(
         if A.block_shape[1] == 1:
             if x.dtype == A.scalar_type:
                 x = x.view(dtype=wp.vec(length=1, dtype=A.scalar_type))
+    else:
+        if A.block_shape[0] == 1:
+            if y.dtype != A.scalar_type:
+                y = y.view(dtype=A.scalar_type)
+        if A.block_shape[1] == 1:
+            if x.dtype != A.scalar_type:
+                x = x.view(dtype=A.scalar_type)
 
     wp.launch(
         kernel=_bsr_mv_kernel,

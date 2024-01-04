@@ -130,6 +130,7 @@ def CreateSimRenderer(renderer):
                 shape_geo_thickness = model.shape_geo.thickness.numpy()
                 shape_geo_is_solid = model.shape_geo.is_solid.numpy()
                 shape_transform = model.shape_transform.numpy()
+                shape_visible = model.shape_visible.numpy()
 
                 p = np.zeros(3, dtype=np.float32)
                 q = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
@@ -216,7 +217,9 @@ def CreateSimRenderer(renderer):
 
                         self.geo_shape[geo_hash] = shape
 
-                    self.add_shape_instance(name, shape, body, X_bs.p, X_bs.q, scale)
+                    if shape_visible[s]:
+                        # TODO support dynamic visibility
+                        self.add_shape_instance(name, shape, body, X_bs.p, X_bs.q, scale, custom_index=s, visible=shape_visible[s])
                     self.instance_count += 1
 
                 if self.show_joints and model.joint_count:
@@ -274,7 +277,7 @@ def CreateSimRenderer(renderer):
                             q = wp.quat(tf[3:])
                             # compute rotation between axis and y
                             axis = axis / np.linalg.norm(axis)
-                            q = q * wp.quat_between_vectors(wp.vec3(*axis), y_axis)
+                            q = q * wp.quat_between_vectors(wp.vec3(axis), y_axis)
                             name = f"joint_{i}_{a}"
                             self.add_shape_instance(name, shape, body, p, q, scale, color1=color, color2=color)
                             self.instance_count += 1
