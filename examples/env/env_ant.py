@@ -62,7 +62,7 @@ class AntEnvironment(Environment):
     opengl_render_settings = dict(scaling=3.0)
     usd_render_settings = dict(scaling=100.0)
 
-    sim_substeps_euler = 32
+    sim_substeps_euler = 5
     sim_substeps_xpbd = 5
 
     joint_attach_ke: float = 100000.0
@@ -75,13 +75,8 @@ class AntEnvironment(Environment):
     controllable_dofs = [6, 7, 8, 9, 10, 11, 12, 13]
     control_gains = [50.0] * 8
     control_limits = [(-1.0, 1.0)] * 8
-    
-    # integrator_type = IntegratorType.EULER
-    
-    num_envs = 1
-    
-    requires_grad = True
-    episode_duration = 1.1
+
+    integrator_type = IntegratorType.FEATHERSTONE
 
     def create_articulation(self, builder):
         wp.sim.parse_mjcf(
@@ -100,16 +95,10 @@ class AntEnvironment(Environment):
             up_axis="y",
         )
         builder.joint_q[7:] = [0.0, 1.0, 0.0, -1.0, 0.0, -1.0, 0.0, 1.0]
-        builder.joint_q[:7] = [0.0, 0.7, 0.0, *wp.quat_from_axis_angle((1.0, 0.0, 0.0), -math.pi * 0.5)]
+        builder.joint_q[:7] = [0.0, 0.7, 0.0, *wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), -math.pi * 0.5)]
 
     def evaluate_cost(self, state: wp.sim.State, cost: wp.array, step: int, horizon_length: int):
-        wp.launch(
-            ant_cost,
-            dim=self.num_envs,
-            inputs=[state.body_q, state.body_qd],
-            outputs=[cost],
-            device=self.device
-        )
+        wp.launch(ant_cost, dim=self.num_envs, inputs=[state.body_q, state.body_qd], outputs=[cost], device=self.device)
 
 
 if __name__ == "__main__":

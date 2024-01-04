@@ -239,7 +239,7 @@ class Controller:
         self.traj_length = 15000
 
         # time steps between control points
-        self.control_step = 30
+        self.control_step = 10
         # number of control horizon points to interpolate between
         self.num_control_points = 3
         # total number of horizon time steps
@@ -270,7 +270,7 @@ class Controller:
         self.env_ref.init()
         self.dof_count = len(self.env_ref.control)
 
-        self.use_graph_capture = False  # wp.get_device(self.device).is_cuda
+        self.use_graph_capture = wp.get_device(self.device).is_cuda
 
         # optimized control points for the current horizon
         self.best_traj = None
@@ -477,13 +477,14 @@ class Controller:
         # gradient-based optimization
         if self._optimizer is None:
             # TODO try Adam
-            self._optimizer = SGD([self.rollout_trajectories.flatten()], lr=2e-6, nesterov=False, momentum=0.0)
-            # self._optimizer = Adam([self.rollout_trajectories.flatten()], lr=1e-2)
+            # self._optimizer = SGD([self.rollout_trajectories.flatten()], lr=2e-2, nesterov=False, momentum=0.0)
+            self._tape_buffer = None  #wp.zeros(10000, dtype=wp.int32, device=self.device)
+            self._optimizer = Adam([self.rollout_trajectories.flatten()], lr=1e-2)
         if self.use_graph_capture:
             self.sample_controls(self.best_traj)
             if self._opt_graph is None or self.env_ref.invalidate_cuda_graph:
                 wp.capture_begin()
-                self.tape = wp.Tape()
+                self.tape = wp.Tape(self._tape_buffer)
                 with self.tape:
                     self.rollout(state, self.rollout_trajectories)
                 self.rollout_costs.grad.fill_(1.0)
@@ -507,41 +508,44 @@ class Controller:
                 #     lambda s, r: self.rollout(s, r),
                 #     inputs=[state, self.rollout_trajectories],
                 #     outputs=[self.rollout_costs])
-                # check_jacobian(
-                #     lambda controls: self.rollout(state, controls),
-                #     inputs=[self.rollout_trajectories],
-                #     input_names=["controls"],
-                #     output_names=["costs"],
-                #     plot_jac_on_fail=True
-                # )
+                check_jacobian(
+                    lambda controls: self.rollout(state, controls),
+                    inputs=[self.rollout_trajectories],
+                    input_names=["controls"],
+                    output_names=["costs"],
+                    plot_jac_on_fail=True,
+                    eps=4e-5,
+                )
 
                 use_fd_grads = False
 
                 if not use_fd_grads:
-                    self.tape = wp.Tape()
+                    self.tape = wp.Tape(self._tape_buffer)
                     with self.tape:
                         self.rollout(state, self.rollout_trajectories)
-                        
 
                     # check_backward_pass(
                     #     self.tape,
-                    #     analyze_graph=True,
+                    #     analyze_graph=False,
                     #     plot_jac_on_fail=True,
+                    #     check_input_output_jacobian=False,
                     #     track_inputs=[self.rollout_trajectories],
                     #     track_outputs=[self.rollout_costs],
                     #     track_input_names=["controls"],
                     #     track_output_names=["costs"],
-                    #     # whitelist_kernels={
-                    #     #     "apply_joint_torques",
-                    #     #     # "solve_simple_body_joints"
-                    #     # }
+                    #     whitelist_kernels={
+                    #         # "apply_joint_torques",
+                    #         # "solve_simple_body_joints",
+                    #         # "eval_dense_solve_batched",
+                    #     }
                     # )
 
                     self.rollout_costs.grad.fill_(1.0)
                     self.tape.backward()
                     
                     plot_state_gradients(self.env_rollout.states, os.path.join(os.path.dirname(
-                        __file__), "mpc_grads.html"))
+                        __file__), "mpc_grads.html"),
+                        title=f"MPC State Gradients (step {len(self.env_ref_costs)}, opt iteration {it})")
                 else:
                     jac_fd = function_jacobian_fd(
                         lambda controls: self.rollout(state, controls),
@@ -791,6 +795,7 @@ if __name__ == "__main__":
     from env_ant import AntEnvironment
     from env_hopper import HopperEnvironment
     from env_cartpole import CartpoleEnvironment
+    from env_point_mass import PointMassEnvironment
     from env_drone import DroneEnvironment
 
     CartpoleEnvironment.env_offset = (0.0, 0.0, 0.0)
@@ -800,9 +805,10 @@ if __name__ == "__main__":
     HopperEnvironment.env_offset = (0.0, 0.0, 0.0)
     DroneEnvironment.env_offset = (0.0, 0.0, 0.0)
 
-    mpc = Controller(AntEnvironment)
+    # mpc = Controller(AntEnvironment)
     # mpc = Controller(HopperEnvironment)
-    # mpc = Controller(CartpoleEnvironment)
+    mpc = Controller(CartpoleEnvironment)
+    # mpc = Controller(PointMassEnvironment)
     # mpc = Controller(DroneEnvironment)
 
     mpc.run()

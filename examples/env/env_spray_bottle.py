@@ -14,19 +14,13 @@
 
 import os
 import warp as wp
-
-wp.config.verify_fp = True
-wp.config.mode = "debug"
 import warp.sim
 
 from environment import Environment, run_env
 
-wp.set_device("cpu")
-
-
 class SprayBottleEnvironment(Environment):
     sim_name = "env_spray_bottle"
-    env_offset = (1.5, 0.0, 1.5)
+    env_offset = (0.5, 0.0, 0.5)
     opengl_render_settings = dict(scaling=5.0)
     usd_render_settings = dict(scaling=100.0)
 
@@ -34,11 +28,11 @@ class SprayBottleEnvironment(Environment):
     sim_substeps_xpbd = 5
 
     activate_ground_plane = True
-    use_graph_capture = False
+    use_graph_capture = True
 
     show_rigid_contact_points = True
 
-    num_envs = 1
+    num_envs = 4
 
     show_joints = False
 
@@ -46,12 +40,11 @@ class SprayBottleEnvironment(Environment):
 
     def create_articulation(self, builder):
         wp.sim.parse_urdf(
-            # os.path.join(os.path.dirname(__file__), "../assets/spray_bottle/mobility.urdf"),
-            r'C:\Users\eric-\source\repos\warp-tool-use-yewon\svgd\assets\panda\panda_gripper.urdf',
+            os.path.join(os.path.dirname(__file__), "../assets/spray_bottle/mobility.urdf"),
             builder,
             xform=wp.transform((0.0, 0.22, 0.0), wp.quat_from_axis_angle((0.7, 0.0, 1.0), 0.1)),
             floating=True,
-            density=100.0,
+            density=1.0,
             armature=1e-4,
             stiffness=0.0,
             damping=0.0,

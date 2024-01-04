@@ -269,7 +269,7 @@ class Controller:
         self.env_ref.init()
         self.dof_count = len(self.env_ref.control)
 
-        self.use_graph_capture = wp.get_device(self.device).is_cuda
+        self.use_graph_capture = False  # wp.get_device(self.device).is_cuda
 
         # optimized control points for the current horizon
         self.best_traj = None
@@ -456,7 +456,7 @@ class Controller:
         self.env_ref.after_simulate()
         self.env_rollout.after_simulate()
 
-    def optimize(self, state):
+    def optimize2(self, state):
         # predictive sampling algorithm
         if self.use_graph_capture:
             if self._opt_graph is None:
@@ -471,7 +471,7 @@ class Controller:
             self.rollout(state, self.rollout_trajectories)
         self.pick_best_control()
 
-    def optimize2(self, state):
+    def optimize(self, state):
         num_opt_steps = 15
         # gradient-based optimization
         if self._optimizer is None:
@@ -518,21 +518,20 @@ class Controller:
                     with self.tape:
                         self.rollout(state, self.rollout_trajectories)
                         
-
-                    # check_backward_pass(
-                    #     self.tape,
-                    #     visualize_graph=False,
-                    #     analyze_graph=True,
-                    #     plot_jac_on_fail=True,
-                    #     track_inputs=[self.rollout_trajectories],
-                    #     track_outputs=[self.rollout_costs],
-                    #     track_input_names=["controls"],
-                    #     track_output_names=["costs"],
-                    #     # whitelist_kernels={
-                    #     #     "apply_joint_torques",
-                    #     #     # "solve_simple_body_joints"
-                    #     # }
-                    # )
+                    check_backward_pass(
+                        self.tape,
+                        visualize_graph=False,
+                        analyze_graph=True,
+                        plot_jac_on_fail=True,
+                        track_inputs=[self.rollout_trajectories],
+                        track_outputs=[self.rollout_costs],
+                        track_input_names=["controls"],
+                        track_output_names=["costs"],
+                        # whitelist_kernels={
+                        #     "apply_joint_torques",
+                        #     # "solve_simple_body_joints"
+                        # }
+                    )
 
                     self.rollout_costs.grad.fill_(1.0)
                     self.tape.backward()

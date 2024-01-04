@@ -19,7 +19,7 @@ import os
 import warp as wp
 import warp.sim
 
-from environment import Environment, run_env
+from environment import Environment, run_env, IntegratorType
 
 
 @wp.kernel
@@ -61,17 +61,23 @@ class HopperEnvironment(Environment):
     opengl_render_settings = dict(scaling=1.0)
     usd_render_settings = dict(scaling=100.0)
 
-    sim_substeps_euler = 32
+    sim_substeps_euler = 16
     sim_substeps_xpbd = 5
+    
+    integrator_type = IntegratorType.FEATHERSTONE
 
     xpbd_settings = dict(iterations=7)
 
     joint_attach_ke: float = 100000.0
     joint_attach_kd: float = 10.0
+    
+    num_envs = 9
 
-    use_graph_capture = True
+    use_graph_capture = False
     use_tiled_rendering = False
     show_joints = True
+    
+    activate_ground_plane = False
 
     controllable_dofs = [3, 4, 5]
     control_gains = [100.0] * 3
@@ -82,7 +88,7 @@ class HopperEnvironment(Environment):
             os.path.join(os.path.dirname(__file__), "../assets/hopper.xml"),
             builder,
             stiffness=0.0,
-            damping=0.001,
+            damping=00.0,  #.001,
             armature=0.001,
             contact_ke=1.0e4,
             contact_kd=1.0e2,
@@ -92,7 +98,7 @@ class HopperEnvironment(Environment):
             limit_kd=1.0e1,
             enable_self_collisions=False,
         )
-        builder.collapse_fixed_joints()
+        # builder.collapse_fixed_joints()
         # initial planar velocity
         # builder.joint_qd[0] = 2.0
         # builder.joint_qd[1] = 2.0
