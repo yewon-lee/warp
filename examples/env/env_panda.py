@@ -19,7 +19,7 @@ import warp.sim
 
 import numpy as np
 
-from environment import Environment, run_env
+from environment import Environment, run_env, IntegratorType
 
 
 @wp.kernel
@@ -58,9 +58,10 @@ def panda_cost(
 @wp.kernel
 def apply_forces(time: float, act_dim: int, joint_act: wp.array(dtype=float)):
     tid = wp.tid()
-    joint_act[tid * act_dim + 1] = -12.0  # XXX need to revert force direction because joint is rotated
+    joint_act[tid * act_dim + 0] = 3.0
+    joint_act[tid * act_dim + 1] = 12.0  # XXX need to revert force direction because joint is rotated
     # joint_act[tid*act_dim + 2] = wp.sin(time * 0.5)
-    joint_act[tid * act_dim + 3] = wp.sin(time * 0.5)
+    # joint_act[tid * act_dim + 3] = wp.sin(time * 0.5)
 
 
 class PandaEnvironment(Environment):
@@ -89,6 +90,9 @@ class PandaEnvironment(Environment):
     
     # requires_grad = True
     episode_duration = 1.1
+
+    # integrator_type = IntegratorType.FEATHERSTONE
+    # integrator_type = IntegratorType.EULER
 
     def create_articulation(self, builder):
         wp.sim.parse_urdf(
@@ -122,20 +126,20 @@ class PandaEnvironment(Environment):
         self.act_dim = len(builder.joint_act)
         print("act dof:", self.act_dim)
 
-    def evaluate_cost(self, state: wp.sim.State, cost: wp.array, step: int, horizon_length: int):
-        wp.launch(
-            panda_cost,
-            dim=self.num_envs,
-            inputs=[state.body_q, state.body_qd],
-            outputs=[cost],
-            device=self.device
-        )
+    # def evaluate_cost(self, state: wp.sim.State, cost: wp.array, step: int, horizon_length: int):
+    #     wp.launch(
+    #         panda_cost,
+    #         dim=self.num_envs,
+    #         inputs=[state.body_q, state.body_qd],
+    #         outputs=[cost],
+    #         device=self.device
+    #     )
 
-    def custom_update(self):
-        wp.launch(apply_forces,
-                  dim=self.num_envs,
-                  inputs=[self.sim_time, self.act_dim],
-                  outputs=[self.state.joint_act],)
+    # def custom_update(self):
+    #     wp.launch(apply_forces,
+    #               dim=self.num_envs,
+    #               inputs=[self.sim_time, self.act_dim],
+    #               outputs=[self.state.joint_act],)
 
 
 if __name__ == "__main__":
