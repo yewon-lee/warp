@@ -1390,22 +1390,20 @@ def eval_joint_force(
 
     limit_f = 0.0
     damping_f = 0.0
-
-    if mode == wp.sim.JOINT_MODE_TARGET_POSITION or mode == wp.sim.JOINT_MODE_LIMIT:
-        # compute limit forces, damping only active when limit is violated
-        if q < limit_lower:
-            limit_f = limit_ke * (limit_lower - q)
-            damping_f = -limit_kd * qd
-
-        if q > limit_upper:
-            limit_f = limit_ke * (limit_upper - q)
-            damping_f = -limit_kd * qd
-
     target_f = 0.0
-    if mode == wp.sim.JOINT_MODE_TARGET_POSITION:
-        target_f = -target_ke * (q - target) - target_kd * qd
-    if mode == wp.sim.JOINT_MODE_TARGET_VELOCITY:
-        target_f = -target_ke * (qd - target)
+
+        # compute limit forces, damping only active when limit is violated
+    if q < limit_lower:
+        limit_f = limit_ke * (limit_lower - q)
+        damping_f = -limit_kd * qd
+    elif q > limit_upper:
+        limit_f = limit_ke * (limit_upper - q)
+        damping_f = -limit_kd * qd
+    else:
+        if mode == wp.sim.JOINT_MODE_TARGET_POSITION:
+            target_f = target_ke * (target - q) - target_kd * qd
+        if mode == wp.sim.JOINT_MODE_TARGET_VELOCITY:
+            target_f = target_ke * (target - qd)
 
     return act + limit_f + damping_f + target_f
 
@@ -2227,14 +2225,14 @@ def compute_forces(model, state, particle_f, body_f, requires_grad, dt):
                 ],
                 device=model.device,
             )
-            import numpy as np
+            # import numpy as np
 
-            max_diff = np.max(np.abs(q2.numpy() - state.body_q.numpy()))
-            print("max_diff", max_diff)
+            # max_diff = np.max(np.abs(q2.numpy() - state.body_q.numpy()))
+            # print("max_diff", max_diff)
             # print("after:")
             # print(q2.numpy())
-            # state.body_q.assign(q2)
-            # state.body_qd.assign(qd2)
+            state.body_q.assign(q2)
+            state.body_qd.assign(qd2)
 
     if model.joint_count:
         wp.launch(
@@ -2422,7 +2420,8 @@ class SemiImplicitIntegrator:
         self.plugins.append(plugin)
 
     def augment_state(self, model, state):
-        state.body_impulses = wp.zeros_like(state.body_qd)
+        if model.body_count:
+            state.body_impulses = wp.zeros_like(state.body_qd)
 
         for plugin in self.plugins:
             if not plugin.initialized:
