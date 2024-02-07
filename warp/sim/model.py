@@ -1476,6 +1476,7 @@ class ModelBuilder:
 
         self.up_vector = articulation.up_vector
         self.gravity = articulation.gravity
+        self._ground_params = articulation._ground_params
 
         if update_num_env_count:
             self.num_envs += 1
@@ -2498,7 +2499,7 @@ class ModelBuilder:
             else:
                 c = np.cross(normal, (0.0, 1.0, 0.0))
                 angle = np.arcsin(np.linalg.norm(c))
-                axis = c / np.linalg.norm(c)
+                axis = np.abs(c) / np.linalg.norm(c)
                 rot = wp.quat_from_axis_angle(axis, angle)
         scale = wp.vec3(width, length, 0.0)
 
@@ -4051,6 +4052,8 @@ class ModelBuilder:
 
             m = Model(device, integrator=integrator)
             m.requires_grad = requires_grad
+
+            m.ground_plane_params = self._ground_params["plane"]
 
             m.num_envs = self.num_envs
 
