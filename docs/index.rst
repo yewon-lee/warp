@@ -63,11 +63,11 @@ An example first program that computes the lengths of random 3D vectors is given
 
 Additional examples
 -------------------
-The `examples <https://github.com/NVIDIA/warp/tree/main/examples>`__ directory in
+The `examples <https://github.com/NVIDIA/warp/tree/main/warp/examples>`__ directory in
 the Github repository contains a number of scripts that show how to
 implement different simulation methods using the Warp API. Most examples
-will generate USD files containing time-sampled animations in the
-``examples/outputs`` directory. Before running examples users should
+will generate USD files containing time-sampled animations in the 
+same directory as the example. Before running examples users should
 ensure that the ``usd-core`` package is installed using:
 
 ::
@@ -144,11 +144,8 @@ If you use Warp in your research please use the following citation:
 License
 -------
 
-Warp is provided under the NVIDIA Source Code License (NVSCL), please see
+Warp is provided under the NVIDIA Software License, please see
 `LICENSE.md <https://github.com/NVIDIA/warp/blob/main/LICENSE.md>`_ for the full license text.
-
-Please contact `omniverse-license-questions@nvidia.com <mailto:omniverse-license-questions@nvidia.com>`_ for
-commercial licensing inquires.
 
 Full Table of Contents
 ----------------------

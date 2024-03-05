@@ -168,6 +168,7 @@ Additionally, arrays can be copied directly between memory spaces: ::
 .. autoclass:: array
     :members:
     :undoc-members:
+    :exclude-members: vars
 
 Multi-dimensional Arrays
 ########################
@@ -213,7 +214,8 @@ The following construction methods are provided for allocating zero-initialized 
 Matrix Multiplication
 #####################
 
-Warp 2D array multiplication is built on NVIDIA's CUTLASS library, which enables fast matrix multiplication of large arrays on the GPU.
+Warp 2D array multiplication is built on NVIDIA's `CUTLASS <https://github.com/NVIDIA/cutlass>`_ library,
+which enables fast matrix multiplication of large arrays on the GPU.
 
 If no GPU is detected, matrix multiplication falls back to Numpy's implementation on the CPU.
 
@@ -258,9 +260,11 @@ The following scalar storage types are supported for array structures:
 +---------+------------------------+
 | uint64  | unsigned long integer  |
 +---------+------------------------+
-| float32 | single precision float |
+| float16 | half-precision float   |
 +---------+------------------------+
-| float64 | double precision float |
+| float32 | single-precision float |
++---------+------------------------+
+| float64 | double-precision float |
 +---------+------------------------+
 
 Warp supports ``float`` and ``int`` as aliases for ``wp.float32`` and ``wp.int32`` respectively.
@@ -273,26 +277,40 @@ Vectors
 Warp provides built-in math and geometry types for common simulation and graphics problems.
 A full reference for operators and functions for these types is available in the :doc:`/modules/functions`.
 
-Warp supports vectors of numbers with an arbitrary length/numeric type. The built in concrete types are as follows:
+Warp supports vectors of numbers with an arbitrary length/numeric type. The built-in concrete types are as follows:
 
 +-----------------------+------------------------------------------------+
-| vec2 vec3 vec4        | 2d, 3d, 4d vector of default precision floats  |
+| vec2 vec3 vec4        | 2D, 3D, 4D vector of single-precision floats   |
 +-----------------------+------------------------------------------------+
-| vec2f vec3f vec4f     | 2d, 3d, 4d vector of single precision floats   |
+| vec2b vec3b vec4b     | 2D, 3D, 4D vector of signed bytes              |
 +-----------------------+------------------------------------------------+
-| vec2d vec3d vec4d     | 2d, 3d, 4d vector of double precision floats   |
+| vec2ub vec3ub vec4ub  | 2D, 3D, 4D vector of unsigned bytes            |
 +-----------------------+------------------------------------------------+
-| vec2h vec3h vec4h     | 2d, 3d, 4d vector of half precision floats     |
+| vec2s vec3s vec4s     | 2D, 3D, 4D vector of signed shorts             |
 +-----------------------+------------------------------------------------+
-| vec2ub vec3ub vec4ub  | 2d, 3d, 4d vector of half precision floats     |
+| vec2us vec3us vec4us  | 2D, 3D, 4D vector of unsigned shorts           |
 +-----------------------+------------------------------------------------+
-| spatial_vector        | 6d vector of single precision floats           |
+| vec2i vec3i vec4i     | 2D, 3D, 4D vector of signed integers           |
 +-----------------------+------------------------------------------------+
-| spatial_vectorf       | 6d vector of single precision floats           |
+| vec2ui vec3ui vec4ui  | 2D, 3D, 4D vector of unsigned integers         |
 +-----------------------+------------------------------------------------+
-| spatial_vectord       | 6d vector of double precision floats           |
+| vec2l vec3l vec4l     | 2D, 3D, 4D vector of signed long integers      |
 +-----------------------+------------------------------------------------+
-| spatial_vectorh       | 6d vector of half precision floats             |
+| vec2ul vec3ul vec4ul  | 2D, 3D, 4D vector of unsigned long integers    |
++-----------------------+------------------------------------------------+
+| vec2h vec3h vec4h     | 2D, 3D, 4D vector of half-precision floats     |
++-----------------------+------------------------------------------------+
+| vec2f vec3f vec4f     | 2D, 3D, 4D vector of single-precision floats   |
++-----------------------+------------------------------------------------+
+| vec2d vec3d vec4d     | 2D, 3D, 4D vector of double-precision floats   |
++-----------------------+------------------------------------------------+
+| spatial_vector        | 6D vector of single-precision floats           |
++-----------------------+------------------------------------------------+
+| spatial_vectorf       | 6D vector of single-precision floats           |
++-----------------------+------------------------------------------------+
+| spatial_vectord       | 6D vector of double-precision floats           |
++-----------------------+------------------------------------------------+
+| spatial_vectorh       | 6D vector of half-precision floats             |
 +-----------------------+------------------------------------------------+
 
 Vectors support most standard linear algebra operations, e.g.: ::
@@ -365,25 +383,25 @@ These can be used with all the standard vector arithmetic operators, e.g.: ``+``
 Matrices
 ########
 
-Matrices with arbitrary shapes/numeric types are also supported. The built in concrete matrix types are as follows:
+Matrices with arbitrary shapes/numeric types are also supported. The built-in concrete matrix types are as follows:
 
-+--------------------------+-----------------------------------------------------+
-| mat22 mat33 mat44        | 2,3 and 4d square matrix of default precision       |
-+--------------------------+-----------------------------------------------------+
-| mat22f mat33f mat44f     | 2,3 and 4d square matrix of single precision floats |
-+--------------------------+-----------------------------------------------------+
-| mat22d mat33d mat44d     | 2,3 and 4d square matrix of double precision floats |
-+--------------------------+-----------------------------------------------------+
-| mat22h mat33h mat44h     | 2,3 and 4d square matrix of half precision floats   |
-+--------------------------+-----------------------------------------------------+
-| spatial_matrix           | 6x6 matrix of single precision floats               |
-+--------------------------+-----------------------------------------------------+
-| spatial_matrixf          | 6x6 matrix of single precision floats               |
-+--------------------------+-----------------------------------------------------+
-| spatial_matrixd          | 6x6 matrix of double precision floats               |
-+--------------------------+-----------------------------------------------------+
-| spatial_matrixh          | 6x6 matrix of half precision floats                 |
-+--------------------------+-----------------------------------------------------+
++--------------------------+-------------------------------------------------+
+| mat22 mat33 mat44        | 2x2, 3x3, 4x4 matrix of single-precision floats |
++--------------------------+-------------------------------------------------+
+| mat22f mat33f mat44f     | 2x2, 3x3, 4x4 matrix of single-precision floats |
++--------------------------+-------------------------------------------------+
+| mat22d mat33d mat44d     | 2x2, 3x3, 4x4 matrix of double-precision floats |
++--------------------------+-------------------------------------------------+
+| mat22h mat33h mat44h     | 2x2, 3x3, 4x4 matrix of half-precision floats   |
++--------------------------+-------------------------------------------------+
+| spatial_matrix           | 6x6 matrix of single-precision floats           |
++--------------------------+-------------------------------------------------+
+| spatial_matrixf          | 6x6 matrix of single-precision floats           |
++--------------------------+-------------------------------------------------+
+| spatial_matrixd          | 6x6 matrix of double-precision floats           |
++--------------------------+-------------------------------------------------+
+| spatial_matrixh          | 6x6 matrix of half-precision floats             |
++--------------------------+-------------------------------------------------+
 
 Matrices are stored in row-major format and support most standard linear algebra operations: ::
 
@@ -411,7 +429,7 @@ In a similar manner to vectors, it's possible to declare new matrix types with a
     # create an array of this type
     a = wp.zeros(10, dtype=mat32h)
 
-These can be used inside a kernel: ::
+These can be used inside a kernel::
 
     @wp.kernel
     def compute( ... ):
@@ -429,7 +447,7 @@ These can be used inside a kernel: ::
         v3 = m * v2
         ...
 
-It's also possible to directly create anonymously typed instances inside kernels where the type is inferred from constructor arguments as follows: ::
+It's also possible to directly create anonymously typed instances inside kernels where the type is inferred from constructor arguments as follows::
 
     @wp.kernel
     def compute( ... ):
@@ -455,19 +473,19 @@ As with vectors, you can do standard matrix arithmetic with these variables, alo
 Quaternions
 ###########
 
-Warp supports quaternions with the layout ``i, j, k, w`` where ``w`` is the real part. Here are the built in concrete quaternion types:
+Warp supports quaternions with the layout ``i, j, k, w`` where ``w`` is the real part. Here are the built-in concrete quaternion types:
 
-+-----------------+-----------------------------------------------+
-| quat            | Default precision floating point quaternion   |
-+-----------------+-----------------------------------------------+
-| quatf           | Single precision floating point quaternion    |
-+-----------------+-----------------------------------------------+
-| quatd           | Double precision floating point quaternion    |
-+-----------------+-----------------------------------------------+
-| quath           | Half precision floating point quaternion      |
-+-----------------+-----------------------------------------------+
++-----------------+--------------------------------------------+
+| quat            | Single-precision floating point quaternion |
++-----------------+--------------------------------------------+
+| quatf           | Single-precision floating point quaternion |
++-----------------+--------------------------------------------+
+| quatd           | Double-precision floating point quaternion |
++-----------------+--------------------------------------------+
+| quath           | Half-precision floating point quaternion   |
++-----------------+--------------------------------------------+
 
-Quaternions can be used to transform vectors as follows: ::
+Quaternions can be used to transform vectors as follows::
 
     @wp.kernel
     def compute( ... ):
@@ -480,11 +498,11 @@ Quaternions can be used to transform vectors as follows: ::
         v = wp.quat_rotate(q, wp.vec3(0.0, 1.0, 0.0))
 
 
-As with vectors and matrices, you can declare quaternion types with an arbitrary numeric type like so: ::
+As with vectors and matrices, you can declare quaternion types with an arbitrary numeric type like so::
 
     quatd = wp.types.quaternion(dtype=wp.float64)
 
-You can also create identity quaternion and anonymously typed instances inside a kernel like so: ::
+You can also create identity quaternion and anonymously typed instances inside a kernel like so::
 
     @wp.kernel
     def compute( ... ):
@@ -512,19 +530,19 @@ You can also create identity quaternion and anonymously typed instances inside a
 Transforms
 ##########
 
-Transforms are 7d vectors of floats representing a spatial rigid body transformation in format (p, q) where p is a 3d vector, and q is a quaternion.
+Transforms are 7D vectors of floats representing a spatial rigid body transformation in format (p, q) where p is a 3D vector, and q is a quaternion.
 
 +-----------------+--------------------------------------------+
-| transform       | Default precision floating point transform |
+| transform       | Single-precision floating point transform  |
 +-----------------+--------------------------------------------+
-| transformf      | Single precision floating point transform  |
+| transformf      | Single-precision floating point transform  |
 +-----------------+--------------------------------------------+
-| transformd      | Double precision floating point transform  |
+| transformd      | Double-precision floating point transform  |
 +-----------------+--------------------------------------------+
-| transformh      | Half precision floating point transform    |
+| transformh      | Half-precision floating point transform    |
 +-----------------+--------------------------------------------+
 
-Transforms can be constructed inside kernels from translation and rotation parts: ::
+Transforms can be constructed inside kernels from translation and rotation parts::
 
     @wp.kernel
     def compute( ... ):
@@ -533,7 +551,7 @@ Transforms can be constructed inside kernels from translation and rotation parts
         # create a transform from a vector/quaternion:
         t = wp.transform(
                 wp.vec3(1.0, 2.0, 3.0),
-                wp.quat_from_axis_angle(0.0, 1.0, 0.0, wp.degrees(30.0)))
+                wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), wp.degrees(30.0)))
 
         # transform a point
         p = wp.transform_point(t, wp.vec3(10.0, 0.5, 1.0))
@@ -542,11 +560,11 @@ Transforms can be constructed inside kernels from translation and rotation parts
         p = wp.transform_vector(t, wp.vec3(10.0, 0.5, 1.0))
 
 
-As with vectors and matrices, you can declare transform types with an arbitrary numeric type using ``wp.types.transformation()``, for example: ::
+As with vectors and matrices, you can declare transform types with an arbitrary numeric type using ``wp.types.transformation()``, for example::
 
     transformd = wp.types.transformation(dtype=wp.float64)
 
-You can also create identity transforms and anonymously typed instances inside a kernel like so: ::
+You can also create identity transforms and anonymously typed instances inside a kernel like so::
 
     @wp.kernel
     def compute( ... ):
@@ -773,10 +791,9 @@ To record a series of kernel launches use the :func:`wp.capture_begin() <capture
         # end capture and return a graph object
         graph = wp.capture_end()
 
-We strongly recommend the use of the the try-finally pattern when capturing graphs because
-:func:`wp.capture_begin <capture_begin>` disables Python garbage collection so that Warp objects are not
-garbage-collected during graph capture (CUDA does not allow memory to be deallocated during graph capture).
-:func:`wp.capture_end <capture_end>` reenables garbage collection.
+We strongly recommend the use of the the try-finally pattern when capturing graphs because the `finally`
+statement will ensure :func:`wp.capture_end <capture_end>` gets called, even if an exception occurs during
+capture, which would otherwise trap the stream in a capturing state.
 
 Once a graph has been constructed it can be executed: ::
 
@@ -1434,6 +1451,52 @@ alongside your snippet as an additional input to the decorator, as in the follow
         wp.launch(kernel=saxpy_kernel, dim=N, inputs=[a, x, y], outputs=[out], device=device)
 
     tape.backward(grads={out: adj_out})
+
+You may also include a custom replay snippet, to be executed as part of the adjoint (see `Custom Gradient Functions`_ for a full explanation).
+Consider the following example::
+
+    def test_custom_replay_grad():
+        num_threads = 8
+        counter = wp.zeros(1, dtype=wp.int32)
+        thread_values = wp.zeros(num_threads, dtype=wp.int32)
+        inputs = wp.array(np.arange(num_threads, dtype=np.float32), requires_grad=True)
+        outputs = wp.zeros_like(inputs)
+
+    snippet = """
+        int next_index = atomicAdd(counter, 1);
+        thread_values[tid] = next_index;
+        """
+    replay_snippet = ""
+
+    @wp.func_native(snippet, replay_snippet=replay_snippet)
+    def reversible_increment(
+        counter: wp.array(dtype=int), thread_values: wp.array(dtype=int), tid: int
+    ):
+        ...
+
+    @wp.kernel
+    def run_atomic_add(
+        input: wp.array(dtype=float),
+        counter: wp.array(dtype=int),
+        thread_values: wp.array(dtype=int),
+        output: wp.array(dtype=float),
+    ):
+        tid = wp.tid()
+        reversible_increment(counter, thread_values, tid)
+        idx = thread_values[tid]
+        output[idx] = input[idx] ** 2.0
+
+    tape = wp.Tape()
+    with tape:
+        wp.launch(
+            run_atomic_add, dim=num_threads, inputs=[inputs, counter, thread_values], outputs=[outputs]
+        )
+
+    tape.backward(grads={outputs: wp.array(np.ones(num_threads, dtype=np.float32))})
+
+By default, ``snippet`` would be called in the backward pass, but in this case, we have a custom replay snippet defined, which is called instead.
+In this case, ``replay_snippet`` is a no-op, which is all that we require, since ``thread_values`` are cached in the forward pass.
+If we did not have a ``replay_snippet`` defined, ``thread_values`` would be overwritten with counter values that exceed the input array size in the backward pass.
 
 Profiling
 ---------

@@ -1,13 +1,15 @@
 Installation
 ============
 
-The easiest way is to install Warp is from `PyPi <https://pypi.org/project/warp-lang>`_:
+Warp supports Python versions 3.7 onwards. It can run on x86-64 and ARMv8 CPUs on Windows, Linux, and macOS. GPU support requires a CUDA capable NVIDIA GPU and driver (minimum GeForce GTX 9xx).
+
+The easiest way to install Warp is from `PyPI <https://pypi.org/project/warp-lang>`_:
 
 .. code-block:: sh
 
     $ pip install warp-lang
 
-Pre-built binary packages for Windows, Linux and macOS are also available on the `Releases <https://github.com/NVIDIA/warp/releases>`__ page. To install in your local Python environment extract the archive and run the following command from the root directory:
+Pre-built binary packages are also available on the `Releases <https://github.com/NVIDIA/warp/releases>`__ page. To install in your local Python environment extract the archive and run the following command from the root directory:
 
 .. code-block:: sh
 
@@ -41,27 +43,18 @@ For developers who want to build the library themselves the following tools are 
 * `CUDA Toolkit <https://developer.nvidia.com/cuda-toolkit>`_, minimum version 11.5
 * `Git Large File Storage <https://git-lfs.com>`_
 
-If you are cloning from Windows, please first ensure that you have
-enabled “Developer Mode” in Windows settings and symlinks in Git:
-
-.. code-block:: console
-
-    $ git config --global core.symlinks true
-
-This will ensure symlinks inside ``exts/omni.warp.core`` work upon cloning.
-
 After cloning the repository, users should run:
 
 .. code-block:: console
 
     $ python build_lib.py
 
-This will generate the ``warp.dll`` / ``warp.so`` core library
-respectively. When building manually, users should ensure that their
-``CUDA_PATH`` environment variable is set, otherwise Warp will be built
-without CUDA support. Alternatively, the path to the CUDA Toolkit can be
-passed to the build command as ``--cuda_path="..."``. After building, the
-Warp package should be installed using:
+This will generate the ``warp.dll`` / ``warp.so`` core library respectively. It
+will search for the CUDA Toolkit in the default install directory. This path can
+be overridden by setting the ``CUDA_PATH`` environment variable. Alternatively,
+the path to the CUDA Toolkit can be passed to the build command as
+``--cuda_path="..."``. After building, the Warp package should be installed using:
+
 
 .. code-block:: console
 
