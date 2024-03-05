@@ -5,11 +5,7 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-version = "1.0.0-beta.5"
-
-cuda_path = (
-    None  # path to local CUDA toolchain, if None at init time warp will attempt to find the SDK using CUDA_PATH env var
-)
+version = "0.15.0"
 
 verify_fp = False  # verify inputs and outputs are finite after each launch
 verify_cuda = False  # if true will check CUDA errors after each kernel launch / memory operation
@@ -18,8 +14,6 @@ print_launches = False  # if true will print out launch information
 mode = "release"
 verbose = False  # print extra informative messages
 quiet = False  # suppress all output except errors and warnings
-
-host_compiler = None  # user can specify host compiler here, otherwise will attempt to find one automatically
 
 cache_kernels = True
 kernel_cache_dir = None  # path to kernel cache directory, if None a default path will be used
@@ -34,4 +28,8 @@ enable_backward = True  # whether to compiler the backward passes of the kernels
 
 llvm_cuda = False  # use Clang/LLVM instead of NVRTC to compile CUDA
 
-graph_capture_module_load_default = True  # Default value of force_module_load for capture_begin()
+enable_graph_capture_module_load_by_default = True  # Default value of force_module_load for capture_begin()
+
+enable_mempools_at_init = True  # Whether CUDA devices will be initialized with mempools enabled (if supported)
+
+max_unroll = 16

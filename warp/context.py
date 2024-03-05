@@ -72,6 +72,7 @@ class Function:
         custom_replay_func=None,
         native_snippet=None,
         adj_native_snippet=None,
+        replay_snippet=None,
         skip_forward_codegen=False,
         skip_reverse_codegen=False,
         custom_reverse_num_input_args=-1,
@@ -97,6 +98,7 @@ class Function:
         self.custom_replay_func = custom_replay_func
         self.native_snippet = native_snippet
         self.adj_native_snippet = adj_native_snippet
+        self.replay_snippet = replay_snippet
         self.custom_grad_func = None
         self.require_original_output_arg = require_original_output_arg
 
@@ -496,16 +498,15 @@ def call_builtin(func: Function, *params) -> Tuple[bool, Any]:
     # Call the built-in function from Warp's dll.
     c_func(*c_params)
 
-    # TODO: uncomment when we have a way to print warning messages only once.
-    # if uses_non_warp_array_type:
-    #     warp.utils.warn(
-    #         "Support for built-in functions called with non-Warp array types, "
-    #         "such as lists, tuples, NumPy arrays, and others, will be dropped "
-    #         "in the future. Use a Warp type such as `wp.vec`, `wp.mat`, "
-    #         "`wp.quat`, or `wp.transform`.",
-    #         DeprecationWarning,
-    #         stacklevel=3
-    #     )
+    if uses_non_warp_array_type:
+        warp.utils.warn(
+            "Support for built-in functions called with non-Warp array types, "
+            "such as lists, tuples, NumPy arrays, and others, will be dropped "
+            "in the future. Use a Warp type such as `wp.vec`, `wp.mat`, "
+            "`wp.quat`, or `wp.transform`.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
 
     if issubclass(value_ctype, ctypes.Array) or issubclass(value_ctype, ctypes.Structure):
         # return vector types as ctypes
@@ -646,7 +647,7 @@ def func(f):
     return m.functions[name]
 
 
-def func_native(snippet, adj_snippet=None):
+def func_native(snippet, adj_snippet=None, replay_snippet=None):
     """
     Decorator to register native code snippet, @func_native
     """
@@ -656,7 +657,13 @@ def func_native(snippet, adj_snippet=None):
 
         m = get_module(f.__module__)
         func = Function(
-            func=f, key=name, namespace="", module=m, native_snippet=snippet, adj_native_snippet=adj_snippet
+            func=f,
+            key=name,
+            namespace="",
+            module=m,
+            native_snippet=snippet,
+            adj_native_snippet=adj_snippet,
+            replay_snippet=replay_snippet,
         )  # cuda snippets do not have a return value_type
 
         return m.functions[name]
@@ -703,13 +710,11 @@ def func_grad(forward_fn):
         def match_function(f):
             # check whether the function overload f matches the signature of the provided gradient function
             if not hasattr(f.adj, "return_var"):
-                # TODO defer return_var check until final module code gen
-                # build the function to resolve return variables
-                # try:
-                #     f.adj.build(None)
-                # except Exception:
-                #     return True
-                return True
+                # we have to temporarily build this function to figure out its return type(s);
+                # note that we do not have a ModuleBuilder instance here at this wrapping stage, hence we
+                # have to create a dummy builder
+                builder = ModuleBuilder(Module("dummy", None), {})
+                f.adj.build(builder, f.module.options)
             expected_args = list(f.input_types.items())
             if f.adj.return_var is not None:
                 expected_args += [(f"adj_ret_{var.label}", var.type) for var in f.adj.return_var]
@@ -750,7 +755,7 @@ def func_grad(forward_fn):
             )
         else:
             # resolve return variables
-            forward_fn.adj.build(None)
+            forward_fn.adj.build(None, forward_fn.module.options)
 
             expected_args = list(forward_fn.input_types.items())
             if forward_fn.adj.return_var is not None:
@@ -1158,6 +1163,7 @@ class ModuleBuilder:
         self.structs = {}
         self.options = options
         self.module = module
+        self.external_functions = []
 
         # build all functions declared in the module
         for func in module.functions.values():
@@ -1173,6 +1179,10 @@ class ModuleBuilder:
             else:
                 for k in kernel.overloads.values():
                     self.build_kernel(k)
+
+        # build all functions outside this module which are called from functions or kernels in this module
+        for func in self.external_functions:
+            self.build_function(func)
 
     def build_struct_recursive(self, struct: warp.codegen.Struct):
         structs = []
@@ -1243,7 +1253,11 @@ class ModuleBuilder:
                 )
             else:
                 source += warp.codegen.codegen_snippet(
-                    func.adj, name=func.key, snippet=func.native_snippet, adj_snippet=func.adj_native_snippet
+                    func.adj,
+                    name=func.key,
+                    snippet=func.native_snippet,
+                    adj_snippet=func.adj_native_snippet,
+                    replay_snippet=func.replay_snippet,
                 )
 
         for kernel in self.module.kernels.values():
@@ -1288,7 +1302,7 @@ class Module:
         self.cuda_build_failed = False
 
         self.options = {
-            "max_unroll": 16,
+            "max_unroll": warp.config.max_unroll,
             "enable_backward": warp.config.enable_backward,
             "fast_math": False,
             "cuda_output": None,  # supported values: "ptx", "cubin", or None (automatic)
@@ -1446,6 +1460,14 @@ class Module:
                         ch.update(bytes(s, "utf-8"))
                     if func.custom_replay_func:
                         s = func.custom_replay_func.adj.source
+                    if func.replay_snippet:
+                        s = func.replay_snippet
+                    if func.native_snippet:
+                        s = func.native_snippet
+                        ch.update(bytes(s, "utf-8"))
+                    if func.adj_native_snippet:
+                        s = func.adj_native_snippet
+                        ch.update(bytes(s, "utf-8"))
 
                     # cache func arg types
                     for arg, arg_type in func.adj.arg_types.items():
@@ -1454,6 +1476,7 @@ class Module:
 
                 # kernel source
                 for kernel in module.kernels.values():
+                    ch.update(bytes(kernel.key, "utf-8"))
                     ch.update(bytes(kernel.adj.source, "utf-8"))
                     # cache kernel arg types
                     for arg, arg_type in kernel.adj.arg_types.items():
@@ -1524,7 +1547,7 @@ class Module:
             if not warp.is_cuda_available():
                 raise RuntimeError("Failed to build CUDA module because CUDA is not available")
 
-        with ScopedTimer(f"Module {self.name} load on device '{device}'", active=not warp.config.quiet, skip_tape=True):
+        with ScopedTimer(f"Module {self.name} load on device '{device}'", active=not warp.config.quiet):
             build_path = warp.build.kernel_bin_dir
             gen_path = warp.build.kernel_gen_dir
 
@@ -1721,33 +1744,83 @@ class Module:
 # execution context
 
 
-# a simple allocator
-# TODO: use a pooled allocator to avoid hitting the system allocator
-class Allocator:
+class CpuDefaultAllocator:
     def __init__(self, device):
+        assert device.is_cpu
+        self.deleter = lambda ptr, size: self.free(ptr, size)
+
+    def alloc(self, size_in_bytes):
+        ptr = runtime.core.alloc_host(size_in_bytes)
+        if not ptr:
+            raise RuntimeError(f"Failed to allocate {size_in_bytes} bytes on device '{self.device}'")
+        return ptr
+
+    def free(self, ptr, size_in_bytes):
+        runtime.core.free_host(ptr)
+
+
+class CpuPinnedAllocator:
+    def __init__(self, device):
+        assert device.is_cpu
+        self.deleter = lambda ptr, size: self.free(ptr, size)
+
+    def alloc(self, size_in_bytes):
+        ptr = runtime.core.alloc_pinned(size_in_bytes)
+        if not ptr:
+            raise RuntimeError(f"Failed to allocate {size_in_bytes} bytes on device '{self.device}'")
+        return ptr
+
+    def free(self, ptr, size_in_bytes):
+        runtime.core.free_pinned(ptr)
+
+
+class CudaDefaultAllocator:
+    def __init__(self, device):
+        assert device.is_cuda
         self.device = device
+        self.deleter = lambda ptr, size: self.free(ptr, size)
 
-    def alloc(self, size_in_bytes, pinned=False):
-        if self.device.is_cuda:
+    def alloc(self, size_in_bytes):
+        ptr = runtime.core.alloc_device_default(self.device.context, size_in_bytes)
+        # If the allocation fails, check if graph capture is active to raise an informative error.
+        # We delay the capture check to avoid overhead.
+        if not ptr:
+            reason = ""
             if self.device.is_capturing:
-                raise RuntimeError(f"Cannot allocate memory on device {self} while graph capture is active")
-            return runtime.core.alloc_device(self.device.context, size_in_bytes)
-        elif self.device.is_cpu:
-            if pinned:
-                return runtime.core.alloc_pinned(size_in_bytes)
-            else:
-                return runtime.core.alloc_host(size_in_bytes)
+                if not self.device.is_mempool_supported:
+                    reason = (
+                        ":  "
+                        f"Failed to allocate memory during graph capture because memory pools are not supported "
+                        f"on device '{self.device}'.  Try pre-allocating memory before capture begins."
+                    )
+                elif not self.device.is_mempool_enabled:
+                    reason = (
+                        ":  "
+                        f"Failed to allocate memory during graph capture because memory pools are not enabled "
+                        f"on device '{self.device}'.  Try calling wp.set_mempool_enabled('{self.device}', True) before capture begins."
+                    )
+            raise RuntimeError(f"Failed to allocate {size_in_bytes} bytes on device '{self.device}'{reason}")
+        return ptr
 
-    def free(self, ptr, size_in_bytes, pinned=False):
-        if self.device.is_cuda:
-            if self.device.is_capturing:
-                raise RuntimeError(f"Cannot free memory on device {self} while graph capture is active")
-            return runtime.core.free_device(self.device.context, ptr)
-        elif self.device.is_cpu:
-            if pinned:
-                return runtime.core.free_pinned(ptr)
-            else:
-                return runtime.core.free_host(ptr)
+    def free(self, ptr, size_in_bytes):
+        runtime.core.free_device_default(self.device.context, ptr)
+
+
+class CudaMempoolAllocator:
+    def __init__(self, device):
+        assert device.is_cuda
+        assert device.is_mempool_supported
+        self.device = device
+        self.deleter = lambda ptr, size: self.free(ptr, size)
+
+    def alloc(self, size_in_bytes):
+        ptr = runtime.core.alloc_device_async(self.device.context, size_in_bytes)
+        if not ptr:
+            raise RuntimeError(f"Failed to allocate {size_in_bytes} bytes on device '{self.device}'")
+        return ptr
+
+    def free(self, ptr, size_in_bytes):
+        runtime.core.free_device_async(self.device.context, ptr)
 
 
 class ContextGuard:
@@ -1769,7 +1842,11 @@ class ContextGuard:
 
 class Stream:
     def __init__(self, device=None, **kwargs):
+        self.cuda_stream = None
         self.owner = False
+
+        # event used internally for synchronization (cached to avoid creating temporary events)
+        self._cached_event = None
 
         # we can't use get_device() if called during init, but we can use an explicit Device arg
         if runtime is not None:
@@ -1782,20 +1859,32 @@ class Stream:
         if not device.is_cuda:
             raise RuntimeError(f"Device {device} is not a CUDA device")
 
+        self.device = device
+
         # we pass cuda_stream through kwargs because cuda_stream=None is actually a valid value (CUDA default stream)
         if "cuda_stream" in kwargs:
             self.cuda_stream = kwargs["cuda_stream"]
+            device.runtime.core.cuda_stream_register(device.context, self.cuda_stream)
         else:
             self.cuda_stream = device.runtime.core.cuda_stream_create(device.context)
             if not self.cuda_stream:
                 raise RuntimeError(f"Failed to create stream on device {device}")
             self.owner = True
 
-        self.device = device
-
     def __del__(self):
+        if not self.cuda_stream:
+            return
+
         if self.owner:
             runtime.core.cuda_stream_destroy(self.device.context, self.cuda_stream)
+        else:
+            runtime.core.cuda_stream_unregister(self.device.context, self.cuda_stream)
+
+    @property
+    def cached_event(self):
+        if self._cached_event is None:
+            self._cached_event = Event(self.device)
+        return self._cached_event
 
     def record_event(self, event=None):
         if event is None:
@@ -1805,20 +1894,23 @@ class Stream:
                 f"Event from device {event.device} cannot be recorded on stream from device {self.device}"
             )
 
-        runtime.core.cuda_event_record(self.device.context, event.cuda_event, self.cuda_stream)
+        runtime.core.cuda_event_record(event.cuda_event, self.cuda_stream)
 
         return event
 
     def wait_event(self, event):
-        runtime.core.cuda_stream_wait_event(self.device.context, self.cuda_stream, event.cuda_event)
+        runtime.core.cuda_stream_wait_event(self.cuda_stream, event.cuda_event)
 
     def wait_stream(self, other_stream, event=None):
         if event is None:
-            event = Event(other_stream.device)
+            event = other_stream.cached_event
 
-        runtime.core.cuda_stream_wait_stream(
-            self.device.context, self.cuda_stream, other_stream.cuda_stream, event.cuda_event
-        )
+        runtime.core.cuda_stream_wait_stream(self.cuda_stream, other_stream.cuda_stream, event.cuda_event)
+
+    # whether a graph capture is currently ongoing on this stream
+    @property
+    def is_capturing(self):
+        return bool(runtime.core.cuda_stream_is_capturing(self.cuda_stream))
 
 
 class Event:
@@ -1849,11 +1941,36 @@ class Event:
             self.owner = True
 
     def __del__(self):
-        if self.owner:
-            runtime.core.cuda_event_destroy(self.device.context, self.cuda_event)
+        if not self.owner:
+            return
+
+        runtime.core.cuda_event_destroy(self.cuda_event)
 
 
 class Device:
+    """A device to allocate Warp arrays and to launch kernels on.
+
+    Attributes:
+        ordinal: A Warp-specific integer label for the device. ``-1`` for CPU devices.
+        name: A string label for the device. By default, CPU devices will be named according to the processor name,
+            or ``"CPU"`` if the processor name cannot be determined.
+        arch: An integer representing the compute capability version number calculated as
+            ``10 * major + minor``. ``0`` for CPU devices.
+        is_uva: A boolean indicating whether or not the device supports unified addressing.
+            ``False`` for CPU devices.
+        is_cubin_supported: A boolean indicating whether or not Warp's version of NVRTC can directly
+            generate CUDA binary files (cubin) for this device's architecture. ``False`` for CPU devices.
+        is_mempool_supported: A boolean indicating whether or not the device supports using the
+            ``cuMemAllocAsync`` and ``cuMemPool`` family of APIs for stream-ordered memory allocations. ``False`` for
+            CPU devices.
+        is_primary: A boolean indicating whether or not this device's CUDA context is also the
+            device's primary context.
+        uuid: A string representing the UUID of the CUDA device. The UUID is in the same format used by
+            ``nvidia-smi -L``. ``None`` for CPU devices.
+        pci_bus_id: A string identifier for the CUDA device in the format ``[domain]:[bus]:[device]``, in which
+            ``domain``, ``bus``, and ``device`` are all hexadecimal values. ``None`` for CPU devices.
+    """
+
     def __init__(self, runtime, alias, ordinal=-1, is_primary=False, context=None):
         self.runtime = runtime
         self.alias = alias
@@ -1871,10 +1988,9 @@ class Device:
         self._stream = None
         self.null_stream = None
 
-        # indicates whether CUDA graph capture is active for this device
-        self.is_capturing = False
+        # set of streams where capture has started
+        self.captures = set()
 
-        self.allocator = Allocator(self)
         self.context_guard = ContextGuard(self)
 
         if self.ordinal == -1:
@@ -1882,29 +1998,57 @@ class Device:
             self.name = platform.processor() or "CPU"
             self.arch = 0
             self.is_uva = False
-            self.is_cubin_supported = False
             self.is_mempool_supported = False
+            self.is_mempool_enabled = False
+            self.is_cubin_supported = False
+            self.uuid = None
+            self.pci_bus_id = None
 
             # TODO: add more device-specific dispatch functions
             self.memset = runtime.core.memset_host
             self.memtile = runtime.core.memtile_host
+
+            self.default_allocator = CpuDefaultAllocator(self)
+            self.pinned_allocator = CpuPinnedAllocator(self)
 
         elif ordinal >= 0 and ordinal < runtime.core.cuda_device_get_count():
             # CUDA device
             self.name = runtime.core.cuda_device_get_name(ordinal).decode()
             self.arch = runtime.core.cuda_device_get_arch(ordinal)
             self.is_uva = runtime.core.cuda_device_is_uva(ordinal)
+            self.is_mempool_supported = runtime.core.cuda_device_is_mempool_supported(ordinal)
+            if warp.config.enable_mempools_at_init:
+                # enable if supported
+                self.is_mempool_enabled = self.is_mempool_supported
+            else:
+                # disable by default
+                self.is_mempool_enabled = False
+
+            uuid_buffer = (ctypes.c_char * 16)()
+            runtime.core.cuda_device_get_uuid(ordinal, uuid_buffer)
+            uuid_byte_str = bytes(uuid_buffer).hex()
+            self.uuid = f"GPU-{uuid_byte_str[0:8]}-{uuid_byte_str[8:12]}-{uuid_byte_str[12:16]}-{uuid_byte_str[16:20]}-{uuid_byte_str[20:]}"
+
+            pci_domain_id = runtime.core.cuda_device_get_pci_domain_id(ordinal)
+            pci_bus_id = runtime.core.cuda_device_get_pci_bus_id(ordinal)
+            pci_device_id = runtime.core.cuda_device_get_pci_device_id(ordinal)
+            # This is (mis)named to correspond to the naming of cudaDeviceGetPCIBusId
+            self.pci_bus_id = f"{pci_domain_id:08X}:{pci_bus_id:02X}:{pci_device_id:02X}"
+
+            self.default_allocator = CudaDefaultAllocator(self)
+            if self.is_mempool_supported:
+                self.mempool_allocator = CudaMempoolAllocator(self)
+            else:
+                self.mempool_allocator = None
+
+            # set current allocator
+            if self.is_mempool_enabled:
+                self.current_allocator = self.mempool_allocator
+            else:
+                self.current_allocator = self.default_allocator
+
             # check whether our NVRTC can generate CUBINs for this architecture
             self.is_cubin_supported = self.arch in runtime.nvrtc_supported_archs
-            self.is_mempool_supported = runtime.core.cuda_device_is_memory_pool_supported(ordinal)
-
-            # Warn the user of a possible misconfiguration of their system
-            if not self.is_mempool_supported:
-                warp.utils.warn(
-                    f"Support for stream ordered memory allocators was not detected on device {ordinal}. "
-                    "This can prevent the use of graphs and/or result in poor performance. "
-                    "Is the UVM driver enabled?"
-                )
 
             # initialize streams unless context acquisition is postponed
             if self._context is not None:
@@ -1919,59 +2063,116 @@ class Device:
         else:
             raise RuntimeError(f"Invalid device ordinal ({ordinal})'")
 
+    def get_allocator(self, pinned=False):
+        if self.is_cuda:
+            return self.current_allocator
+        else:
+            if pinned:
+                return self.pinned_allocator
+            else:
+                return self.default_allocator
+
     def init_streams(self):
         # create a stream for asynchronous work
-        self.stream = Stream(self)
+        self.set_stream(Stream(self))
 
         # CUDA default stream for some synchronous operations
         self.null_stream = Stream(self, cuda_stream=None)
 
     @property
     def is_cpu(self):
+        """A boolean indicating whether or not the device is a CPU device."""
         return self.ordinal < 0
 
     @property
     def is_cuda(self):
+        """A boolean indicating whether or not the device is a CUDA device."""
         return self.ordinal >= 0
 
     @property
+    def is_capturing(self):
+        if self.is_cuda and self.stream is not None:
+            # There is no CUDA API to check if graph capture was started on a device, so we
+            # can't tell if a capture was started by external code on a different stream.
+            # The best we can do is check whether a graph capture was started by Warp on this
+            # device and whether the current stream is capturing.
+            return self.captures or self.stream.is_capturing
+        else:
+            return False
+
+    @property
     def context(self):
+        """The context associated with the device."""
         if self._context is not None:
             return self._context
         elif self.is_primary:
             # acquire primary context on demand
-            self._context = self.runtime.core.cuda_device_primary_context_retain(self.ordinal)
+            prev_context = runtime.core.cuda_context_get_current()
+            self._context = self.runtime.core.cuda_device_get_primary_context(self.ordinal)
             if self._context is None:
+                runtime.core.cuda_context_set_current(prev_context)
                 raise RuntimeError(f"Failed to acquire primary context for device {self}")
             self.runtime.context_map[self._context] = self
             # initialize streams
             self.init_streams()
+            runtime.core.cuda_context_set_current(prev_context)
         return self._context
 
     @property
     def has_context(self):
+        """A boolean indicating whether or not the device has a CUDA context associated with it."""
         return self._context is not None
 
     @property
     def stream(self):
+        """The stream associated with a CUDA device.
+
+        Raises:
+            RuntimeError: The device is not a CUDA device.
+        """
         if self.context:
             return self._stream
         else:
             raise RuntimeError(f"Device {self} is not a CUDA device")
 
     @stream.setter
-    def stream(self, s):
+    def stream(self, stream):
+        self.set_stream(stream)
+
+    def set_stream(self, stream, sync=True):
         if self.is_cuda:
-            if s.device != self:
-                raise RuntimeError(f"Stream from device {s.device} cannot be used on device {self}")
-            self._stream = s
-            self.runtime.core.cuda_context_set_stream(self.context, s.cuda_stream)
+            if stream.device != self:
+                raise RuntimeError(f"Stream from device {stream.device} cannot be used on device {self}")
+
+            self.runtime.core.cuda_context_set_stream(self.context, stream.cuda_stream, int(sync))
+            self._stream = stream
         else:
             raise RuntimeError(f"Device {self} is not a CUDA device")
 
     @property
     def has_stream(self):
+        """A boolean indicating whether or not the device has a stream associated with it."""
         return self._stream is not None
+
+    @property
+    def total_memory(self):
+        if self.is_cuda:
+            total_mem = ctypes.c_size_t()
+            self.runtime.core.cuda_device_get_memory_info(self.ordinal, None, ctypes.byref(total_mem))
+            return total_mem.value
+        else:
+            # TODO: cpu
+            return 0
+
+    @property
+    def free_memory(self):
+        if self.is_cuda:
+            free_mem = ctypes.c_size_t()
+            self.runtime.core.cuda_device_get_memory_info(self.ordinal, ctypes.byref(free_mem), None)
+            return free_mem.value
+        else:
+            # TODO: cpu
+            return 0
 
     def __str__(self):
         return self.alias
@@ -1997,11 +2198,14 @@ class Device:
             self.runtime.core.cuda_context_set_current(self.context)
 
     def can_access(self, other):
+        # TODO: this function should be redesigned in terms of (device, resource).
+        # - a device can access any resource on the same device
+        # - a CUDA device can access pinned memory on the host
+        # - a CUDA device can access regular allocations on a peer device if peer access is enabled
+        # - a CUDA device can access mempool allocations on a peer device if mempool access is enabled
         other = self.runtime.get_device(other)
         if self.context == other.context:
             return True
-        elif self.context is not None and other.context is not None:
-            return bool(self.runtime.core.cuda_context_can_access_peer(self.context, other.context))
         else:
             return False
 
@@ -2017,6 +2221,9 @@ class Graph:
         self.exec = exec
 
     def __del__(self):
+        if not self.exec:
+            return
+
         # use CUDA context guard to avoid side effects during garbage collection
         with self.device.context_guard:
             runtime.core.cuda_graph_destroy(self.device.context, self.exec)
@@ -2056,12 +2263,23 @@ class Runtime:
             self.llvm = None
 
         # setup c-types for warp.dll
+        self.core.get_error_string.argtypes = []
+        self.core.get_error_string.restype = ctypes.c_char_p
+        self.core.set_error_output_enabled.argtypes = [ctypes.c_int]
+        self.core.set_error_output_enabled.restype = None
+        self.core.is_error_output_enabled.argtypes = []
+        self.core.is_error_output_enabled.restype = ctypes.c_int
+
         self.core.alloc_host.argtypes = [ctypes.c_size_t]
         self.core.alloc_host.restype = ctypes.c_void_p
         self.core.alloc_pinned.argtypes = [ctypes.c_size_t]
         self.core.alloc_pinned.restype = ctypes.c_void_p
         self.core.alloc_device.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
         self.core.alloc_device.restype = ctypes.c_void_p
+        self.core.alloc_device_default.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        self.core.alloc_device_default.restype = ctypes.c_void_p
+        self.core.alloc_device_async.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        self.core.alloc_device_async.restype = ctypes.c_void_p
 
         self.core.float_to_half_bits.argtypes = [ctypes.c_float]
         self.core.float_to_half_bits.restype = ctypes.c_uint16
@@ -2074,6 +2292,10 @@ class Runtime:
         self.core.free_pinned.restype = None
         self.core.free_device.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         self.core.free_device.restype = None
+        self.core.free_device_default.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self.core.free_device_default.restype = None
+        self.core.free_device_async.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self.core.free_device_async.restype = None
 
         self.core.memset_host.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t]
         self.core.memset_host.restype = None
@@ -2092,15 +2314,40 @@ class Runtime:
         self.core.memtile_device.restype = None
 
         self.core.memcpy_h2h.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
-        self.core.memcpy_h2h.restype = None
-        self.core.memcpy_h2d.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
-        self.core.memcpy_h2d.restype = None
-        self.core.memcpy_d2h.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
-        self.core.memcpy_d2h.restype = None
-        self.core.memcpy_d2d.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
-        self.core.memcpy_d2d.restype = None
-        self.core.memcpy_peer.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
-        self.core.memcpy_peer.restype = None
+        self.core.memcpy_h2h.restype = ctypes.c_bool
+        self.core.memcpy_h2d.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+        ]
+        self.core.memcpy_h2d.restype = ctypes.c_bool
+        self.core.memcpy_d2h.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+        ]
+        self.core.memcpy_d2h.restype = ctypes.c_bool
+        self.core.memcpy_d2d.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+        ]
+        self.core.memcpy_d2d.restype = ctypes.c_bool
+        self.core.memcpy_p2p.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+        ]
+        self.core.memcpy_p2p.restype = ctypes.c_bool
 
         self.core.array_copy_host.argtypes = [
             ctypes.c_void_p,
@@ -2109,7 +2356,7 @@ class Runtime:
             ctypes.c_int,
             ctypes.c_int,
         ]
-        self.core.array_copy_host.restype = ctypes.c_size_t
+        self.core.array_copy_host.restype = ctypes.c_bool
         self.core.array_copy_device.argtypes = [
             ctypes.c_void_p,
             ctypes.c_void_p,
@@ -2118,7 +2365,7 @@ class Runtime:
             ctypes.c_int,
             ctypes.c_int,
         ]
-        self.core.array_copy_device.restype = ctypes.c_size_t
+        self.core.array_copy_device.restype = ctypes.c_bool
 
         self.core.array_fill_host.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
         self.core.array_fill_host.restype = None
@@ -2272,6 +2519,7 @@ class Runtime:
         self.core.hash_grid_reserve_device.argtypes = [ctypes.c_uint64, ctypes.c_int]
 
         self.core.cutlass_gemm.argtypes = [
+            ctypes.c_void_p,
             ctypes.c_int,
             ctypes.c_int,
             ctypes.c_int,
@@ -2288,7 +2536,7 @@ class Runtime:
             ctypes.c_bool,
             ctypes.c_int,
         ]
-        self.core.cutlass_gemm.restypes = ctypes.c_bool
+        self.core.cutlass_gemm.restype = ctypes.c_bool
 
         self.core.volume_create_host.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
         self.core.volume_create_host.restype = ctypes.c_uint64
@@ -2424,14 +2672,30 @@ class Runtime:
 
         self.core.cuda_device_get_count.argtypes = None
         self.core.cuda_device_get_count.restype = ctypes.c_int
-        self.core.cuda_device_primary_context_retain.argtypes = [ctypes.c_int]
-        self.core.cuda_device_primary_context_retain.restype = ctypes.c_void_p
+        self.core.cuda_device_get_primary_context.argtypes = [ctypes.c_int]
+        self.core.cuda_device_get_primary_context.restype = ctypes.c_void_p
         self.core.cuda_device_get_name.argtypes = [ctypes.c_int]
         self.core.cuda_device_get_name.restype = ctypes.c_char_p
         self.core.cuda_device_get_arch.argtypes = [ctypes.c_int]
         self.core.cuda_device_get_arch.restype = ctypes.c_int
         self.core.cuda_device_is_uva.argtypes = [ctypes.c_int]
         self.core.cuda_device_is_uva.restype = ctypes.c_int
+        self.core.cuda_device_is_mempool_supported.argtypes = [ctypes.c_int]
+        self.core.cuda_device_is_mempool_supported.restype = ctypes.c_int
+        self.core.cuda_device_set_mempool_release_threshold.argtypes = [ctypes.c_int, ctypes.c_uint64]
+        self.core.cuda_device_set_mempool_release_threshold.restype = ctypes.c_int
+        self.core.cuda_device_get_mempool_release_threshold.argtypes = [ctypes.c_int]
+        self.core.cuda_device_get_mempool_release_threshold.restype = ctypes.c_uint64
+        self.core.cuda_device_get_memory_info.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
+        self.core.cuda_device_get_memory_info.restype = None
+        self.core.cuda_device_get_uuid.argtypes = [ctypes.c_int, ctypes.c_char * 16]
+        self.core.cuda_device_get_uuid.restype = None
+        self.core.cuda_device_get_pci_domain_id.argtypes = [ctypes.c_int]
+        self.core.cuda_device_get_pci_domain_id.restype = ctypes.c_int
+        self.core.cuda_device_get_pci_bus_id.argtypes = [ctypes.c_int]
+        self.core.cuda_device_get_pci_bus_id.restype = ctypes.c_int
+        self.core.cuda_device_get_pci_device_id.argtypes = [ctypes.c_int]
+        self.core.cuda_device_get_pci_device_id.restype = ctypes.c_int
 
         self.core.cuda_context_get_current.argtypes = None
         self.core.cuda_context_get_current.restype = ctypes.c_void_p
@@ -2456,42 +2720,53 @@ class Runtime:
         self.core.cuda_context_is_primary.restype = ctypes.c_int
         self.core.cuda_context_get_stream.argtypes = [ctypes.c_void_p]
         self.core.cuda_context_get_stream.restype = ctypes.c_void_p
-        self.core.cuda_context_set_stream.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self.core.cuda_context_set_stream.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
         self.core.cuda_context_set_stream.restype = None
-        self.core.cuda_context_can_access_peer.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        self.core.cuda_context_can_access_peer.restype = ctypes.c_int
+
+        # peer access
+        self.core.cuda_is_peer_access_supported.argtypes = [ctypes.c_int, ctypes.c_int]
+        self.core.cuda_is_peer_access_supported.restype = ctypes.c_int
+        self.core.cuda_is_peer_access_enabled.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self.core.cuda_is_peer_access_enabled.restype = ctypes.c_int
+        self.core.cuda_set_peer_access_enabled.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+        self.core.cuda_set_peer_access_enabled.restype = ctypes.c_int
+        self.core.cuda_is_mempool_access_enabled.argtypes = [ctypes.c_int, ctypes.c_int]
+        self.core.cuda_is_mempool_access_enabled.restype = ctypes.c_int
+        self.core.cuda_set_mempool_access_enabled.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]
+        self.core.cuda_set_mempool_access_enabled.restype = ctypes.c_int
 
         self.core.cuda_stream_create.argtypes = [ctypes.c_void_p]
         self.core.cuda_stream_create.restype = ctypes.c_void_p
         self.core.cuda_stream_destroy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         self.core.cuda_stream_destroy.restype = None
-        self.core.cuda_stream_synchronize.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self.core.cuda_stream_register.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self.core.cuda_stream_register.restype = None
+        self.core.cuda_stream_unregister.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self.core.cuda_stream_unregister.restype = None
+        self.core.cuda_stream_synchronize.argtypes = [ctypes.c_void_p]
         self.core.cuda_stream_synchronize.restype = None
-        self.core.cuda_stream_wait_event.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+        self.core.cuda_stream_wait_event.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         self.core.cuda_stream_wait_event.restype = None
-        self.core.cuda_stream_wait_stream.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-        ]
+        self.core.cuda_stream_wait_stream.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
         self.core.cuda_stream_wait_stream.restype = None
+        self.core.cuda_stream_is_capturing.argtypes = [ctypes.c_void_p]
+        self.core.cuda_stream_is_capturing.restype = ctypes.c_int
 
         self.core.cuda_event_create.argtypes = [ctypes.c_void_p, ctypes.c_uint]
         self.core.cuda_event_create.restype = ctypes.c_void_p
-        self.core.cuda_event_destroy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self.core.cuda_event_destroy.argtypes = [ctypes.c_void_p]
         self.core.cuda_event_destroy.restype = None
-        self.core.cuda_event_record.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+        self.core.cuda_event_record.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         self.core.cuda_event_record.restype = None
 
-        self.core.cuda_graph_begin_capture.argtypes = [ctypes.c_void_p]
-        self.core.cuda_graph_begin_capture.restype = None
-        self.core.cuda_graph_end_capture.argtypes = [ctypes.c_void_p]
-        self.core.cuda_graph_end_capture.restype = ctypes.c_void_p
+        self.core.cuda_graph_begin_capture.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+        self.core.cuda_graph_begin_capture.restype = ctypes.c_bool
+        self.core.cuda_graph_end_capture.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        self.core.cuda_graph_end_capture.restype = ctypes.c_bool
         self.core.cuda_graph_launch.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        self.core.cuda_graph_launch.restype = None
+        self.core.cuda_graph_launch.restype = ctypes.c_bool
         self.core.cuda_graph_destroy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        self.core.cuda_graph_destroy.restype = None
+        self.core.cuda_graph_destroy.restype = ctypes.c_bool
 
         self.core.cuda_compile_program.argtypes = [
             ctypes.c_char_p,
@@ -2520,6 +2795,7 @@ class Runtime:
             ctypes.c_size_t,
             ctypes.c_int,
             ctypes.POINTER(ctypes.c_void_p),
+            ctypes.c_void_p,
         ]
         self.core.cuda_launch_kernel.restype = ctypes.c_size_t
 
@@ -2573,7 +2849,11 @@ class Runtime:
             else:
                 self.nvrtc_supported_archs = []
 
-        # register CUDA devices
+        # this is so we can give non-primary contexts a reasonable alias
+        # associated with the physical device (e.g., "cuda:0.0", "cuda:0.1")
+        self.cuda_custom_context_count = [0] * cuda_device_count
+
+        # register primary CUDA devices
         self.cuda_devices = []
         self.cuda_primary_devices = []
         for i in range(cuda_device_count):
@@ -2585,8 +2865,12 @@ class Runtime:
 
         # set default device
         if cuda_device_count > 0:
-            if self.core.cuda_context_get_current() is not None:
+            # stick with the current cuda context, if one is bound
+            initial_context = self.core.cuda_context_get_current()
+            if initial_context is not None:
                 self.set_default_device("cuda")
+                # if this is a non-primary context that was just registered, update the device count
+                cuda_device_count = len(self.cuda_devices)
             else:
                 self.set_default_device("cuda:0")
         else:
@@ -2596,42 +2880,124 @@ class Runtime:
         # initialize kernel cache
         warp.build.init_kernel_cache(warp.config.kernel_cache_dir)
 
+        devices_without_uva = []
+        devices_without_mempool = []
+
         # print device and version information
         if not warp.config.quiet:
-            print(f"Warp {warp.config.version} initialized:")
+            greeting = []
+
+            greeting.append(f"Warp {warp.config.version} initialized:")
             if cuda_device_count > 0:
                 toolkit_version = (self.toolkit_version // 1000, (self.toolkit_version % 1000) // 10)
                 driver_version = (self.driver_version // 1000, (self.driver_version % 1000) // 10)
-                print(
-                    f"   CUDA Toolkit: {toolkit_version[0]}.{toolkit_version[1]}, Driver: {driver_version[0]}.{driver_version[1]}"
+                greeting.append(
+                    f"   CUDA Toolkit {toolkit_version[0]}.{toolkit_version[1]}, Driver {driver_version[0]}.{driver_version[1]}"
                 )
             else:
                 if self.core.is_cuda_enabled():
                     # Warp was compiled with CUDA support, but no devices are available
-                    print("   CUDA devices not available")
+                    greeting.append("   CUDA devices not available")
                 else:
                     # Warp was compiled without CUDA support
-                    print("   CUDA support not enabled in this build")
-            print("   Devices:")
-            print(f'     "{self.cpu_device.alias}"    | {self.cpu_device.name}')
+                    greeting.append("   CUDA support not enabled in this build")
+            greeting.append("   Devices:")
+            alias_str = f'"{self.cpu_device.alias}"'
+            name_str = f'"{self.cpu_device.name}"'
+            greeting.append(f"     {alias_str:10s} : {name_str}")
             for cuda_device in self.cuda_devices:
-                print(f'     "{cuda_device.alias}" | {cuda_device.name} (sm_{cuda_device.arch})')
-            print(f"   Kernel cache: {warp.config.kernel_cache_dir}")
+                alias_str = f'"{cuda_device.alias}"'
+                if cuda_device.is_primary:
+                    name_str = f'"{cuda_device.name}"'
+                    arch_str = f"sm_{cuda_device.arch}"
+                    mem_str = f"{cuda_device.total_memory / 1024 / 1024 / 1024:.0f} GiB"
+                    if not cuda_device.is_uva:
+                        devices_without_uva.append(cuda_device)
+                    if cuda_device.is_mempool_supported:
+                        if cuda_device.is_mempool_enabled:
+                            mempool_str = "mempool enabled"
+                        else:
+                            mempool_str = "mempool supported"
+                    else:
+                        mempool_str = "mempool not supported"
+                        devices_without_mempool.append(cuda_device)
+                    greeting.append(f"     {alias_str:10s} : {name_str} ({mem_str}, {arch_str}, {mempool_str})")
+                else:
+                    primary_alias_str = f'"{self.cuda_primary_devices[cuda_device.ordinal].alias}"'
+                    greeting.append(f"     {alias_str:10s} : Non-primary context on device {primary_alias_str}")
+            if cuda_device_count > 1:
+                # check peer access support
+                access_matrix = []
+                all_accessible = True
+                none_accessible = True
+                for i in range(cuda_device_count):
+                    target_device = self.cuda_devices[i]
+                    access_vector = []
+                    for j in range(cuda_device_count):
+                        if i == j:
+                            access_vector.append(1)
+                        else:
+                            peer_device = self.cuda_devices[j]
+                            can_access = self.core.cuda_is_peer_access_supported(
+                                target_device.ordinal, peer_device.ordinal
+                            )
+                            access_vector.append(can_access)
+                            all_accessible = all_accessible and can_access
+                            none_accessible = none_accessible and not can_access
+                    access_matrix.append(access_vector)
+                greeting.append("   CUDA peer access:")
+                if all_accessible:
+                    greeting.append("     Supported fully (all-directional)")
+                elif none_accessible:
+                    greeting.append("     Not supported")
+                else:
+                    greeting.append("     Supported partially (see access matrix)")
+                    # print access matrix
+                    for i in range(cuda_device_count):
+                        alias_str = f'"{self.cuda_devices[i].alias}"'
+                        greeting.append(f"     {alias_str:10s} : {access_matrix[i]}")
+            greeting.append("   Kernel cache:")
+            greeting.append(f"     {warp.config.kernel_cache_dir}")
 
-        # CUDA compatibility check
-        if cuda_device_count > 0 and not self.core.is_cuda_compatibility_enabled():
-            if self.driver_version < self.toolkit_version:
-                print("******************************************************************")
-                print("* WARNING:                                                       *")
-                print("*   Warp was compiled without CUDA compatibility support         *")
-                print("*   (quick build).  The CUDA Toolkit version used to build       *")
-                print("*   Warp is not fully supported by the current driver.           *")
-                print("*   Some CUDA functionality may not work correctly!              *")
-                print("*   Update the driver or rebuild Warp without the --quick flag.  *")
-                print("******************************************************************")
+            print("\n".join(greeting))
+
+        if cuda_device_count > 0:
+            # warn about possible misconfiguration of the system
+            if devices_without_uva:
+                # This should not happen on any system officially supported by Warp.  UVA is not available
+                # on 32-bit Windows, which we don't support.  Nonetheless, we should check and report a
+                # warning out of abundance of caution.  It may help with debugging a broken VM setup etc.
+                warp.utils.warn(
+                    f"Support for Unified Virtual Addressing (UVA) was not detected on devices {devices_without_uva}."
+                )
+            if devices_without_mempool:
+                warp.utils.warn(
+                    f"Support for CUDA memory pools was not detected on devices {devices_without_mempool}. "
+                    "This prevents memory allocations in CUDA graphs and may result in poor performance. "
+                    "Is the UVM driver enabled?"
+                )
+
+            # CUDA compatibility check.  This should only affect developer builds done with the
+            # --quick flag.  The consequences of running with an older driver can be obscure and severe,
+            # so make sure we print a very visible warning.
+            if self.driver_version < self.toolkit_version and not self.core.is_cuda_compatibility_enabled():
+                print("******************************************************************\n"
+                      "* WARNING:                                                       *\n"
+                      "*   Warp was compiled without CUDA compatibility support         *\n"
+                      "*   (quick build).  The CUDA Toolkit version used to build       *\n"
+                      "*   Warp is not fully supported by the current driver.           *\n"
+                      "*   Some CUDA functionality may not work correctly!              *\n"
+                      "*   Update the driver or rebuild Warp without the --quick flag.  *\n"
+                      "******************************************************************\n")
+
+            # ensure initialization did not change the initial context (e.g. querying available memory)
+            self.core.cuda_context_set_current(initial_context)
 
         # global tape
         self.tape = None
+
+    def get_error_string(self):
+        return self.core.get_error_string().decode("utf-8")
 
     def load_dll(self, dll_path):
         try:
@@ -2644,7 +3010,7 @@ class Runtime:
                 raise RuntimeError(
                     f"Failed to load the shared library '{dll_path}'.\n"
                     "The execution environment's libstdc++ runtime is older than the version the Warp library was built for.\n"
-                    "See https://nvidia.github.io/warp/_build/html/installation.html#conda-environments for details."
+                    "See https://nvidia.github.io/warp/installation.html#conda-environments for details."
                 ) from e
             else:
                 raise RuntimeError(f"Failed to load the shared library '{dll_path}'") from e
@@ -2681,14 +3047,20 @@ class Runtime:
                 return device
             else:
                 # this is an unseen non-primary context, register it as a new device with a unique alias
-                alias = f"cuda!{current_context:x}"
+                ordinal = self.core.cuda_context_get_device_ordinal(current_context)
+                alias = f"cuda:{ordinal}.{self.cuda_custom_context_count[ordinal]}"
+                self.cuda_custom_context_count[ordinal] += 1
                 return self.map_cuda_device(alias, current_context)
         elif self.default_device.is_cuda:
             return self.default_device
         elif self.cuda_devices:
             return self.cuda_devices[0]
         else:
-            raise RuntimeError("CUDA is not available")
+            # CUDA is not available
+            if not self.core.is_cuda_enabled():
+                raise RuntimeError('"cuda" device requested but this build of Warp does not support CUDA')
+            else:
+                raise RuntimeError('"cuda" device requested but CUDA is not supported by the hardware or driver')
 
     def rename_device(self, device, alias):
         del self.device_map[device.alias]
@@ -2889,20 +3261,253 @@ def unmap_cuda_device(alias: str):
     runtime.unmap_cuda_device(alias)
 
 
+def is_mempool_supported(device: Devicelike):
+    """Check if CUDA memory pool allocators are available on the device."""
+
+    assert_initialized()
+
+    device = runtime.get_device(device)
+
+    return device.is_mempool_supported
+
+
+def is_mempool_enabled(device: Devicelike):
+    """Check if CUDA memory pool allocators are enabled on the device."""
+
+    assert_initialized()
+
+    device = runtime.get_device(device)
+
+    return device.is_mempool_enabled
+
+
+def set_mempool_enabled(device: Devicelike, enable: bool):
+    """Enable or disable CUDA memory pool allocators on the device.
+
+    Pooled allocators are typically faster and allow allocating memory during graph capture.
+
+    They should generally be enabled, but there is a rare caveat.  Copying data between different GPUs
+    may fail during graph capture if the memory was allocated using pooled allocators and memory pool
+    access is not enabled between the two GPUs.  This is an internal CUDA limitation that is not related
+    to Warp.  The preferred solution is to enable memory pool access using `warp.set_mempool_access_enabled()`.
+    If peer access is not supported, then the default CUDA allocators must be used to pre-allocate the memory
+    prior to graph capture.
+    """
+
+    assert_initialized()
+
+    device = runtime.get_device(device)
+
+    if device.is_cuda:
+        if enable:
+            if not device.is_mempool_supported:
+                raise RuntimeError(f"Device {device} does not support memory pools")
+            device.current_allocator = device.mempool_allocator
+            device.is_mempool_enabled = True
+        else:
+            device.current_allocator = device.default_allocator
+            device.is_mempool_enabled = False
+    else:
+        if enable:
+            raise ValueError("Memory pools are only supported on CUDA devices")
+
+
+def set_mempool_release_threshold(device: Devicelike, threshold: int):
+    """Set the CUDA memory pool release threshold on the device.
+
+    This is the amount of reserved memory to hold onto before trying to release memory back to the OS.
+    When more than this amount of bytes is held by the memory pool, the allocator will try to release
+    memory back to the OS on the next call to stream, event, or device synchronize.
+    """
+
+    assert_initialized()
+
+    device = runtime.get_device(device)
+
+    if not device.is_cuda:
+        raise ValueError("Memory pools are only supported on CUDA devices")
+
+    if not device.is_mempool_supported:
+        raise RuntimeError(f"Device {device} does not support memory pools")
+
+    if not runtime.core.cuda_device_set_mempool_release_threshold(device.ordinal, threshold):
+        raise RuntimeError(f"Failed to set memory pool release threshold for device {device}")
+
+
+def get_mempool_release_threshold(device: Devicelike):
+    """Get the CUDA memory pool release threshold on the device."""
+
+    assert_initialized()
+
+    device = runtime.get_device(device)
+
+    if not device.is_cuda:
+        raise ValueError("Memory pools are only supported on CUDA devices")
+
+    if not device.is_mempool_supported:
+        raise RuntimeError(f"Device {device} does not support memory pools")
+
+    return runtime.core.cuda_device_get_mempool_release_threshold(device.ordinal)
+
+
+def is_peer_access_supported(target_device: Devicelike, peer_device: Devicelike):
+    """Check if `peer_device` can directly access the memory of `target_device` on this system.
+
+    This applies to memory allocated using default CUDA allocators.  For memory allocated using
+    CUDA pooled allocators, use `is_mempool_access_supported()`.
+
+    Returns:
+        A Boolean value indicating if this peer access is supported by the system.
+    """
+
+    assert_initialized()
+
+    target_device = runtime.get_device(target_device)
+    peer_device = runtime.get_device(peer_device)
+
+    if not target_device.is_cuda or not peer_device.is_cuda:
+        return False
+
+    return bool(runtime.core.cuda_is_peer_access_supported(target_device.ordinal, peer_device.ordinal))
+
+
+def is_peer_access_enabled(target_device: Devicelike, peer_device: Devicelike):
+    """Check if `peer_device` can currently access the memory of `target_device`.
+
+    This applies to memory allocated using default CUDA allocators.  For memory allocated using
+    CUDA pooled allocators, use `is_mempool_access_enabled()`.
+
+    Returns:
+        A Boolean value indicating if this peer access is currently enabled.
+    """
+
+    assert_initialized()
+
+    target_device = runtime.get_device(target_device)
+    peer_device = runtime.get_device(peer_device)
+
+    if not target_device.is_cuda or not peer_device.is_cuda:
+        return False
+
+    return bool(runtime.core.cuda_is_peer_access_enabled(target_device.context, peer_device.context))
+
+
+def set_peer_access_enabled(target_device: Devicelike, peer_device: Devicelike, enable: bool):
+    """Enable or disable direct access from `peer_device` to the memory of `target_device`.
+
+    Enabling peer access can improve the speed of peer-to-peer memory transfers, but can have
+    a negative impact on memory consumption and allocation performance.
+
+    This applies to memory allocated using default CUDA allocators.  For memory allocated using
+    CUDA pooled allocators, use `set_mempool_access_enabled()`.
+    """
+
+    assert_initialized()
+
+    target_device = runtime.get_device(target_device)
+    peer_device = runtime.get_device(peer_device)
+
+    if not target_device.is_cuda or not peer_device.is_cuda:
+        if enable:
+            raise ValueError("Peer access is only supported between CUDA devices")
+        else:
+            return
+
+    if not is_peer_access_supported(target_device, peer_device):
+        if enable:
+            raise RuntimeError(f"Device {peer_device} cannot access device {target_device}")
+        else:
+            return
+
+    if not runtime.core.cuda_set_peer_access_enabled(target_device.context, peer_device.context, int(enable)):
+        action = "enable" if enable else "disable"
+        raise RuntimeError(f"Failed to {action} peer access from device {peer_device} to device {target_device}")
+
+
+def is_mempool_access_supported(target_device: Devicelike, peer_device: Devicelike):
+    """Check if `peer_device` can directly access the memory pool of `target_device`.
+
+    If mempool access is possible, it can be managed using `set_mempool_access_enabled()` and `is_mempool_access_enabled()`.
+
+    Returns:
+        A Boolean value indicating if this memory pool access is supported by the system.
+    """
+
+    assert_initialized()
+
+    return target_device.is_mempool_supported and is_peer_access_supported(target_device, peer_device)
+
+
+def is_mempool_access_enabled(target_device: Devicelike, peer_device: Devicelike):
+    """Check if `peer_device` can currently access the memory pool of `target_device`.
+
+    This applies to memory allocated using CUDA pooled allocators.  For memory allocated using
+    default CUDA allocators, use `is_peer_access_enabled()`.
+
+    Returns:
+        A Boolean value indicating if this peer access is currently enabled.
+    """
+
+    assert_initialized()
+
+    target_device = runtime.get_device(target_device)
+    peer_device = runtime.get_device(peer_device)
+
+    if not peer_device.is_cuda or not target_device.is_cuda or not target_device.is_mempool_supported:
+        return False
+
+    return bool(runtime.core.cuda_is_mempool_access_enabled(target_device.ordinal, peer_device.ordinal))
+
+
+def set_mempool_access_enabled(target_device: Devicelike, peer_device: Devicelike, enable: bool):
+    """Enable or disable access from `peer_device` to the memory pool of `target_device`.
+
+    This applies to memory allocated using CUDA pooled allocators.  For memory allocated using
+    default CUDA allocators, use `set_peer_access_enabled()`.
+    """
+
+    assert_initialized()
+
+    target_device = runtime.get_device(target_device)
+    peer_device = runtime.get_device(peer_device)
+
+    if not target_device.is_cuda or not peer_device.is_cuda:
+        if enable:
+            raise ValueError("Memory pool access is only supported between CUDA devices")
+        else:
+            return
+
+    if not target_device.is_mempool_supported:
+        if enable:
+            raise RuntimeError(f"Device {target_device} does not support memory pools")
+        else:
+            return
+
+    if not is_peer_access_supported(target_device, peer_device):
+        if enable:
+            raise RuntimeError(f"Device {peer_device} cannot access device {target_device}")
+        else:
+            return
+
+    if not runtime.core.cuda_set_mempool_access_enabled(target_device.ordinal, peer_device.ordinal, int(enable)):
+        action = "enable" if enable else "disable"
+        raise RuntimeError(f"Failed to {action} memory pool access from device {peer_device} to device {target_device}")
+
+
 def get_stream(device: Devicelike = None) -> Stream:
     """Return the stream currently used by the given device"""
 
     return get_device(device).stream
 
 
-def set_stream(stream, device: Devicelike = None):
+def set_stream(stream, device: Devicelike = None, sync: bool = False):
     """Set the stream to be used by the given device.
 
     If this is an external stream, caller is responsible for guaranteeing the lifetime of the stream.
     Consider using wp.ScopedStream instead.
     """
 
-    get_device(device).stream = stream
+    get_device(device).set_stream(stream, sync=sync)
 
 
 def record_event(event: Event = None):
@@ -2970,7 +3575,12 @@ class RegisteredGLBuffer:
         self.resource = runtime.core.cuda_graphics_register_gl_buffer(self.context, gl_buffer_id, flags)
 
     def __del__(self):
-        runtime.core.cuda_graphics_unregister_resource(self.context, self.resource)
+        if not self.resource:
+            return
+
+        # use CUDA context guard to avoid side effects during garbage collection
+        with self.device.context_guard:
+            runtime.core.cuda_graphics_unregister_resource(self.context, self.resource)
 
     def map(self, dtype, shape) -> warp.array:
         """Map the OpenGL buffer to a Warp array.
@@ -2989,7 +3599,7 @@ class RegisteredGLBuffer:
         runtime.core.cuda_graphics_device_ptr_and_size(
             self.context, self.resource, ctypes.byref(ptr), ctypes.byref(size)
         )
-        return warp.array(ptr=ptr.value, dtype=dtype, shape=shape, device=self.device, owner=False)
+        return warp.array(ptr=ptr.value, dtype=dtype, shape=shape, device=self.device)
 
     def unmap(self):
         """Unmap the OpenGL buffer."""
@@ -3019,9 +3629,7 @@ def zeros(
 
     arr = empty(shape=shape, dtype=dtype, device=device, requires_grad=requires_grad, pinned=pinned, **kwargs)
 
-    # use the CUDA default stream for synchronous behaviour with other streams
-    with warp.ScopedStream(arr.device.null_stream):
-        arr.zero_()
+    arr.zero_()
 
     return arr
 
@@ -3046,6 +3654,48 @@ def zeros_like(
     arr.zero_()
 
     return arr
+
+
+def ones(
+    shape: Tuple = None,
+    dtype=float,
+    device: Devicelike = None,
+    requires_grad: bool = False,
+    pinned: bool = False,
+    **kwargs,
+) -> warp.array:
+    """Return a one-initialized array
+
+    Args:
+        shape: Array dimensions
+        dtype: Type of each element, e.g.: warp.vec3, warp.mat33, etc
+        device: Device that array will live on
+        requires_grad: Whether the array will be tracked for back propagation
+        pinned: Whether the array uses pinned host memory (only applicable to CPU arrays)
+
+    Returns:
+        A warp.array object representing the allocation
+    """
+
+    return full(shape=shape, value=1, dtype=dtype, device=device, requires_grad=requires_grad, pinned=pinned, **kwargs)
+
+
+def ones_like(
+    src: warp.array, device: Devicelike = None, requires_grad: bool = None, pinned: bool = None
+) -> warp.array:
+    """Return a one-initialized array with the same type and dimension of another array
+
+    Args:
+        src: The template array to use for shape, data type, and device
+        device: The device where the new array will be created (defaults to src.device)
+        requires_grad: Whether the array will be tracked for back propagation
+        pinned: Whether the array uses pinned host memory (only applicable to CPU arrays)
+
+    Returns:
+        A warp.array object representing the allocation
+    """
+
+    return full_like(src, 1, device=device, requires_grad=requires_grad, pinned=pinned)
 
 
 def full(
@@ -3107,9 +3757,7 @@ def full(
 
     arr = empty(shape=shape, dtype=dtype, device=device, requires_grad=requires_grad, pinned=pinned, **kwargs)
 
-    # use the CUDA default stream for synchronous behaviour with other streams
-    with warp.ScopedStream(arr.device.null_stream):
-        arr.fill_(value)
+    arr.fill_(value)
 
     return arr
 
@@ -3248,7 +3896,6 @@ def from_numpy(
         data=arr,
         dtype=dtype,
         shape=shape,
-        owner=False,
         device=device,
         requires_grad=requires_grad,
     )
@@ -3292,7 +3939,6 @@ def pack_arg(kernel, arg_type, arg_name, value, device, adjoint=False):
                 )
 
             # check device
-            # if a.device != device and not device.can_access(a.device):
             if value.device != device:
                 raise RuntimeError(
                     f"Error launching kernel '{kernel.key}', trying to launch on device='{device}', but input array for argument '{arg_name}' is on device={value.device}."
@@ -3448,22 +4094,29 @@ class Launch:
         for i, v in enumerate(values):
             self.set_param_at_index_from_ctype(i, v)
 
-    def launch(self) -> Any:
+    def launch(self, stream=None) -> Any:
         if self.device.is_cpu:
             self.hooks.forward(*self.params)
         else:
+            if stream is None:
+                stream = self.device.stream
             runtime.core.cuda_launch_kernel(
-                self.device.context, self.hooks.forward, self.bounds.size, self.max_blocks, self.params_addr
+                self.device.context,
+                self.hooks.forward,
+                self.bounds.size,
+                self.max_blocks,
+                self.params_addr,
+                stream.cuda_stream,
             )
 
 
 def launch(
     kernel,
     dim: Tuple[int],
-    inputs: List,
-    outputs: List = [],
-    adj_inputs: List = [],
-    adj_outputs: List = [],
+    inputs: Sequence = [],
+    outputs: Sequence = [],
+    adj_inputs: Sequence = [],
+    adj_outputs: Sequence = [],
     device: Devicelike = None,
     stream: Stream = None,
     adjoint=False,
@@ -3478,7 +4131,7 @@ def launch(
     Args:
         kernel: The name of a Warp kernel function, decorated with the ``@wp.kernel`` decorator
         dim: The number of threads to launch the kernel, can be an integer, or a Tuple of ints with max of 4 dimensions
-        inputs: The input parameters to the kernel
+        inputs: The input parameters to the kernel (optional)
         outputs: The output parameters (optional)
         adj_inputs: The adjoint inputs (optional)
         adj_outputs: The adjoint outputs (optional)
@@ -3523,8 +4176,13 @@ def launch(
 
                 params.append(pack_arg(kernel, arg_type, arg_name, a, device, adjoint))
 
-        fwd_args = inputs + outputs
-        adj_args = adj_inputs + adj_outputs
+        fwd_args = []
+        fwd_args.extend(inputs)
+        fwd_args.extend(outputs)
+
+        adj_args = []
+        adj_args.extend(adj_inputs)
+        adj_args.extend(adj_outputs)
 
         if (len(fwd_args)) != (len(kernel.adj.args)):
             raise RuntimeError(
@@ -3575,51 +4233,51 @@ def launch(
             kernel_args = [ctypes.c_void_p(ctypes.addressof(x)) for x in params]
             kernel_params = (ctypes.c_void_p * len(kernel_args))(*kernel_args)
 
-            with warp.ScopedStream(stream):
-                if adjoint:
-                    if hooks.backward is None:
-                        raise RuntimeError(
-                            f"Failed to find backward kernel '{kernel.key}' from module '{kernel.module.name}' for device '{device}'"
-                        )
+            if stream is None:
+                stream = device.stream
 
-                    runtime.core.cuda_launch_kernel(
-                        device.context, hooks.backward, bounds.size, max_blocks, kernel_params
+            if adjoint:
+                if hooks.backward is None:
+                    raise RuntimeError(
+                        f"Failed to find backward kernel '{kernel.key}' from module '{kernel.module.name}' for device '{device}'"
                     )
 
+                runtime.core.cuda_launch_kernel(
+                    device.context, hooks.backward, bounds.size, max_blocks, kernel_params, stream.cuda_stream
+                )
+
+            else:
+                if hooks.forward is None:
+                    raise RuntimeError(
+                        f"Failed to find forward kernel '{kernel.key}' from module '{kernel.module.name}' for device '{device}'"
+                    )
+
+                if record_cmd:
+                    launch = Launch(
+                        kernel=kernel,
+                        hooks=hooks,
+                        params=params,
+                        params_addr=kernel_params,
+                        bounds=bounds,
+                        device=device,
+                    )
+                    return launch
+
                 else:
-                    if hooks.forward is None:
-                        raise RuntimeError(
-                            f"Failed to find forward kernel '{kernel.key}' from module '{kernel.module.name}' for device '{device}'"
-                        )
+                    # launch
+                    runtime.core.cuda_launch_kernel(
+                        device.context, hooks.forward, bounds.size, max_blocks, kernel_params, stream.cuda_stream
+                    )
 
-                    if record_cmd:
-                        launch = Launch(
-                            kernel=kernel,
-                            hooks=hooks,
-                            params=params,
-                            params_addr=kernel_params,
-                            bounds=bounds,
-                            device=device,
-                        )
-                        return launch
-
-                    else:
-                        # launch
-                        runtime.core.cuda_launch_kernel(
-                            device.context, hooks.forward, bounds.size, max_blocks, kernel_params
-                        )
-
-                try:
-                    runtime.verify_cuda_device(device)
-                except Exception as e:
-                    print(f"Error launching kernel: {kernel.key} on device {device}")
-                    raise e
+            try:
+                runtime.verify_cuda_device(device)
+            except Exception as e:
+                print(f"Error launching kernel: {kernel.key} on device {device}")
+                raise e
 
     # record on tape if one is active
     if runtime.tape and record_tape:
-        import traceback
-        stack_trace = ''.join(traceback.extract_stack().format()[:-1])
-        runtime.tape.record_launch(kernel, dim, max_blocks, inputs, outputs, device, meta_data={"stack_trace": stack_trace})
+        runtime.tape.record_launch(kernel, dim, max_blocks, inputs, outputs, device)
 
 
 def synchronize():
@@ -3653,7 +4311,7 @@ def synchronize_device(device: Devicelike = None):
     or memory copies have completed.
 
     Args:
-        device: Device to synchronize.  If None, synchronize the current CUDA device.
+        device: Device to synchronize.
     """
 
     device = runtime.get_device(device)
@@ -3676,7 +4334,7 @@ def synchronize_stream(stream_or_device=None):
     else:
         stream = runtime.get_device(stream_or_device).stream
 
-    runtime.core.cuda_stream_synchronize(stream.device.context, stream.cuda_stream)
+    runtime.core.cuda_stream_synchronize(stream.cuda_stream)
 
 
 def force_load(device: Union[Device, str, List[Device], List[str]] = None, modules: List[Module] = None):
@@ -3760,7 +4418,7 @@ def set_module_options(options: Dict[str, Any], module: Optional[Any] = None):
     for the current module individually. Available options are listed below.
 
     * **mode**: The compilation mode to use, can be "debug", or "release", defaults to the value of ``warp.config.mode``.
-    * **max_unroll**: The maximum fixed-size loop to unroll (default 16)
+    * **max_unroll**: The maximum fixed-size loop to unroll, defaults to the value of ``warp.config.max_unroll``.
 
     Args:
 
@@ -3786,22 +4444,28 @@ def get_module_options(module: Optional[Any] = None) -> Dict[str, Any]:
     return get_module(m.__name__).options
 
 
-def capture_begin(device: Devicelike = None, stream=None, force_module_load=None):
+def capture_begin(device: Devicelike = None, stream=None, force_module_load=None, external=False):
     """Begin capture of a CUDA graph
 
     Captures all subsequent kernel launches and memory operations on CUDA devices.
-    This can be used to record large numbers of kernels and replay them with low-overhead.
+    This can be used to record large numbers of kernels and replay them with low overhead.
+
+    If `device` is specified, the capture will begin on the CUDA stream currently
+    associated with the device.  If `stream` is specified, the capture will begin
+    on the given stream.  If both are omitted, the capture will begin on the current
+    stream of the current device.
 
     Args:
 
-        device: The device to capture on, if None the current CUDA device will be used
+        device: The CUDA device to capture on
         stream: The CUDA stream to capture on
         force_module_load: Whether or not to force loading of all kernels before capture, in general it is better to use :func:`~warp.load_module()` to selectively load kernels.
+        external: Whether the capture was already started externally
 
     """
 
     if force_module_load is None:
-        force_module_load = warp.config.graph_capture_module_load_default
+        force_module_load = warp.config.enable_graph_capture_module_load_by_default
 
     if warp.config.verify_cuda:
         raise RuntimeError("Cannot use CUDA error verification during graph capture")
@@ -3812,24 +4476,36 @@ def capture_begin(device: Devicelike = None, stream=None, force_module_load=None
         device = runtime.get_device(device)
         if not device.is_cuda:
             raise RuntimeError("Must be a CUDA device")
+        stream = device.stream
 
-    if force_module_load:
-        force_load(device)
+    if external:
+        # make sure the stream is already capturing
+        if not stream.is_capturing:
+            raise RuntimeError("External capture reported, but the stream is not capturing")
+    else:
+        # make sure the stream is not capturing yet
+        if stream.is_capturing:
+            raise RuntimeError("Graph capture already in progress on this stream")
 
-    device.is_capturing = True
+        if force_module_load:
+            force_load(device)
 
-    # disable garbage collection to avoid older allocations getting collected during graph capture
-    gc.disable()
+    device.captures.add(stream)
 
-    with warp.ScopedStream(stream):
-        runtime.core.cuda_graph_begin_capture(device.context)
+    if not runtime.core.cuda_graph_begin_capture(device.context, stream.cuda_stream, int(external)):
+        raise RuntimeError(runtime.get_error_string())
 
 
-def capture_end(device: Devicelike = None, stream=None) -> Graph:
+def capture_end(device: Devicelike = None, stream: Stream = None) -> Graph:
     """Ends the capture of a CUDA graph
 
+    Args:
+
+        device: The CUDA device where capture began
+        stream: The CUDA stream where capture began
+
     Returns:
-        A handle to a CUDA graph object that can be launched with :func:`~warp.capture_launch()`
+        A Graph object that can be launched with :func:`~warp.capture_launch()`
     """
 
     if stream is not None:
@@ -3838,20 +4514,22 @@ def capture_end(device: Devicelike = None, stream=None) -> Graph:
         device = runtime.get_device(device)
         if not device.is_cuda:
             raise RuntimeError("Must be a CUDA device")
+        stream = device.stream
 
-    with warp.ScopedStream(stream):
-        graph = runtime.core.cuda_graph_end_capture(device.context)
+    if stream not in device.captures:
+        raise RuntimeError("Graph capture is not active on this stream")
 
-    device.is_capturing = False
+    device.captures.remove(stream)
 
-    # re-enable GC
-    gc.enable()
+    graph = ctypes.c_void_p()
+    result = runtime.core.cuda_graph_end_capture(device.context, stream.cuda_stream, ctypes.byref(graph))
 
-    if graph is None:
-        raise RuntimeError(
-            "Error occurred during CUDA graph capture. This could be due to an unintended allocation or CPU/GPU synchronization event."
-        )
-    else:
+    if not result:
+        # A concrete error should've already been reported, so we don't need to go into details here
+        raise RuntimeError(f"CUDA graph capture failed. {runtime.get_error_string()}")
+
+    # note that for external captures, we do not return a graph, because we don't instantiate it ourselves
+    if graph:
         return Graph(device, graph)
 
 
@@ -3869,15 +4547,16 @@ def capture_launch(graph: Graph, stream: Stream = None):
         device = stream.device
     else:
         device = graph.device
+        stream = device.stream
 
-    with warp.ScopedStream(stream):
-        runtime.core.cuda_graph_launch(device.context, graph.exec)
+    if not runtime.core.cuda_graph_launch(graph.exec, stream.cuda_stream):
+        raise RuntimeError(f"Graph launch error: {runtime.get_error_string()}")
 
 
 def copy(
     dest: warp.array, src: warp.array, dest_offset: int = 0, src_offset: int = 0, count: int = 0, stream: Stream = None
 ):
-    """Copy array contents from src to dest
+    """Copy array contents from `src` to `dest`.
 
     Args:
         dest: Destination array, must be at least as big as source buffer
@@ -3886,6 +4565,12 @@ def copy(
         src_offset: Element offset in the source array
         count: Number of array elements to copy (will copy all elements if set to 0)
         stream: The stream on which to perform the copy (optional)
+
+    The stream, if specified, can be from any device.  If the stream is omitted, then Warp selects a stream based on the following rules:
+    (1) If the destination array is on a CUDA device, use the current stream on the destination device.
+    (2) Otherwise, if the source array is on a CUDA device, use the current stream on the source device.
+
+    If neither source nor destination are on a CUDA device, no stream is used for the copy.
 
     """
 
@@ -3899,14 +4584,50 @@ def copy(
     if count == 0:
         return
 
-    # copying non-contiguous arrays requires that they are on the same device
-    if not (src.is_contiguous and dest.is_contiguous) and src.device != dest.device:
-        if dest.is_contiguous:
-            # make a contiguous copy of the source array
-            src = src.contiguous()
-        else:
-            # make a copy of the source array on the destination device
-            src = src.to(dest.device)
+    # figure out the stream for the copy
+    if stream is None:
+        if dest.device.is_cuda:
+            stream = dest.device.stream
+        elif src.device.is_cuda:
+            stream = src.device.stream
+
+    # Copying between different devices requires contiguous arrays.  If the arrays
+    # are not contiguous, we must use temporary staging buffers for the transfer.
+    # TODO: We can skip the staging if device access is enabled.
+    if src.device != dest.device:
+        # If the source is not contiguous, make a contiguous copy on the source device.
+        if not src.is_contiguous:
+            # FIXME: We can't use a temporary CPU allocation during graph capture,
+            # because launching the graph will crash after the allocation is
+            # garbage-collected.
+            if src.device.is_cpu and stream.is_capturing:
+                raise RuntimeError("Failed to allocate a CPU staging buffer during graph capture")
+            # This involves an allocation and a kernel launch, which must run on the source device.
+            if src.device.is_cuda and stream != src.device.stream:
+                src.device.stream.wait_stream(stream)
+                src = src.contiguous()
+                stream.wait_stream(src.device.stream)
+            else:
+                src = src.contiguous()
+
+        # The source is now contiguous.  If the destination is not contiguous,
+        # clone a contiguous copy on the destination device.
+        if not dest.is_contiguous:
+            # FIXME: We can't use a temporary CPU allocation during graph capture,
+            # because launching the graph will crash after the allocation is
+            # garbage-collected.
+            if dest.device.is_cpu and stream.is_capturing:
+                raise RuntimeError("Failed to allocate a CPU staging buffer during graph capture")
+            # The allocation must run on the destination device
+            if dest.device.is_cuda and stream != dest.device.stream:
+                dest.device.stream.wait_stream(stream)
+                tmp = empty_like(src, device=dest.device)
+                stream.wait_stream(dest.device.stream)
+            else:
+                tmp = empty_like(src, device=dest.device)
+            # Run the copy on the stream given by the caller
+            copy(tmp, src, stream=stream)
+            src = tmp
 
     if src.is_contiguous and dest.is_contiguous:
         bytes_to_copy = count * warp.types.type_size_in_bytes(src.dtype)
@@ -3930,32 +4651,33 @@ def copy(
                 f"Trying to copy source buffer with size ({bytes_to_copy}) to offset ({dst_offset_in_bytes}) is larger than destination size ({dst_size_in_bytes})"
             )
 
-        if src.device.is_cpu and dest.device.is_cpu:
-            runtime.core.memcpy_h2h(dst_ptr, src_ptr, bytes_to_copy)
-        else:
-            # figure out the CUDA context/stream for the copy
-            if stream is not None:
-                copy_device = stream.device
-            elif dest.device.is_cuda:
-                copy_device = dest.device
-            else:
-                copy_device = src.device
-
-            with warp.ScopedStream(stream):
-                if src.device.is_cpu and dest.device.is_cuda:
-                    runtime.core.memcpy_h2d(copy_device.context, dst_ptr, src_ptr, bytes_to_copy)
-                elif src.device.is_cuda and dest.device.is_cpu:
-                    runtime.core.memcpy_d2h(copy_device.context, dst_ptr, src_ptr, bytes_to_copy)
-                elif src.device.is_cuda and dest.device.is_cuda:
-                    if src.device == dest.device:
-                        runtime.core.memcpy_d2d(copy_device.context, dst_ptr, src_ptr, bytes_to_copy)
-                    else:
-                        runtime.core.memcpy_peer(copy_device.context, dst_ptr, src_ptr, bytes_to_copy)
+        if dest.device.is_cuda:
+            if src.device.is_cuda:
+                if src.device == dest.device:
+                    result = runtime.core.memcpy_d2d(
+                        dest.device.context, dst_ptr, src_ptr, bytes_to_copy, stream.cuda_stream
+                    )
                 else:
-                    raise RuntimeError("Unexpected source and destination combination")
+                    result = runtime.core.memcpy_p2p(
+                        dest.device.context, dst_ptr, src.device.context, src_ptr, bytes_to_copy, stream.cuda_stream
+                    )
+            else:
+                result = runtime.core.memcpy_h2d(
+                    dest.device.context, dst_ptr, src_ptr, bytes_to_copy, stream.cuda_stream
+                )
+        else:
+            if src.device.is_cuda:
+                result = runtime.core.memcpy_d2h(
+                    src.device.context, dst_ptr, src_ptr, bytes_to_copy, stream.cuda_stream
+                )
+            else:
+                result = runtime.core.memcpy_h2h(dst_ptr, src_ptr, bytes_to_copy)
+
+        if not result:
+            raise RuntimeError(f"Warp copy error: {runtime.get_error_string()}")
 
     else:
-        # handle non-contiguous and indexed arrays
+        # handle non-contiguous arrays
 
         if src.shape != dest.shape:
             raise RuntimeError("Incompatible array shapes")
@@ -3983,11 +4705,24 @@ def copy(
         src_type = warp.types.array_type_id(src)
         dst_type = warp.types.array_type_id(dest)
 
-        if src.device.is_cuda:
-            with warp.ScopedStream(stream):
-                runtime.core.array_copy_device(src.device.context, dst_ptr, src_ptr, dst_type, src_type, src_elem_size)
+        if dest.device.is_cuda:
+            # This work involves a kernel launch, so it must run on the destination device.
+            # If the copy stream is different, we need to synchronize it.
+            if stream == dest.device.stream:
+                result = runtime.core.array_copy_device(
+                    dest.device.context, dst_ptr, src_ptr, dst_type, src_type, src_elem_size
+                )
+            else:
+                dest.device.stream.wait_stream(stream)
+                result = runtime.core.array_copy_device(
+                    dest.device.context, dst_ptr, src_ptr, dst_type, src_type, src_elem_size
+                )
+                stream.wait_stream(dest.device.stream)
         else:
-            runtime.core.array_copy_host(dst_ptr, src_ptr, dst_type, src_type, src_elem_size)
+            result = runtime.core.array_copy_host(dst_ptr, src_ptr, dst_type, src_type, src_elem_size)
+
+        if not result:
+            raise RuntimeError(f"Warp copy error: {runtime.get_error_string()}")
 
     # copy gradient, if needed
     if hasattr(src, "grad") and src.grad is not None and hasattr(dest, "grad") and dest.grad is not None:

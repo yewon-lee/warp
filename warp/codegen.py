@@ -11,6 +11,7 @@ import ast
 import builtins
 import ctypes
 import inspect
+import math
 import re
 import sys
 import textwrap
@@ -417,7 +418,10 @@ def compute_type_str(base_name, template_params):
         if isinstance(p, int):
             return str(p)
         elif hasattr(p, "_type_"):
-            return f"wp::{p.__name__}"
+            if p.__name__ == "bool":
+                return "bool"
+            else:
+                return f"wp::{p.__name__}"
         return p.__name__
 
     return f"{base_name}<{','.join(map(param2str, template_params))}>"
@@ -492,6 +496,11 @@ class Block:
 
         # list of vars declared in this block
         self.vars = []
+
+
+def is_local_value(value) -> bool:
+    """Check whether a variable is defined inside a kernel."""
+    return isinstance(value, (warp.context.Function, Var))
 
 
 class Adjoint:
@@ -589,11 +598,16 @@ class Adjoint:
         adj.skip_build = False
 
     # generate function ssa form and adjoint
-    def build(adj, builder):
+    def build(adj, builder, default_builder_options={}):
         if adj.skip_build:
             return
 
         adj.builder = builder
+
+        if adj.builder:
+            adj.builder_options = adj.builder.options
+        else:
+            adj.builder_options = default_builder_options
 
         adj.symbols = {}  # map from symbols to adjoint variables
         adj.variables = []  # list of local variables (in order)
@@ -810,7 +824,7 @@ class Adjoint:
         return output
 
     def resolve_func(adj, func, args, min_outputs, templates, kwds):
-        arg_types = [strip_reference(a.type) for a in args if a is not None and not isinstance(a, warp.context.Function)]
+        arg_types = [strip_reference(a.type) for a in args if not isinstance(a, warp.context.Function)]
 
         if not func.is_builtin():
             # user-defined function
@@ -905,15 +919,20 @@ class Adjoint:
                     break
 
         # if it is a user-function then build it recursively
-        if not func.is_builtin():
+        if not func.is_builtin() and func not in adj.builder.functions:
             adj.builder.build_function(func)
+            # add custom grad, replay functions to the list of functions
+            # to be built later (invalid code could be generated if we built them now)
+            # so that they are not missed when only the forward function is imported
+            # from another module
+            if func.custom_grad_func:
+                adj.builder.external_functions.append(func.custom_grad_func)
+            if func.custom_replay_func:
+                adj.builder.external_functions.append(func.custom_replay_func)
 
         # evaluate the function type based on inputs
         arg_types = [strip_reference(a.type) for a in args if not isinstance(a, warp.context.Function)]
-        if func.value_func is None:
-            return_type = None
-        else:
-            return_type = func.value_func(arg_types, kwds, templates)
+        return_type = func.value_func(arg_types, kwds, templates)
 
         func_name = compute_type_str(func.native_func, templates)
         param_types = list(func.input_types.values())
@@ -921,9 +940,11 @@ class Adjoint:
         use_initializer_list = func.initializer_list_func(args, templates)
 
         args_var = [
-            adj.load(a)
-            if not ((param_types[i] == Reference or param_types[i] == Callable) if i < len(param_types) else False)
-            else a
+            (
+                adj.load(a)
+                if not ((param_types[i] == Reference or param_types[i] == Callable) if i < len(param_types) else False)
+                else a
+            )
             for i, a in enumerate(args)
         ]
 
@@ -937,7 +958,7 @@ class Adjoint:
                 f"{func.namespace}{func_name}({adj.format_forward_call_args(args_var, use_initializer_list)});"
             )
             replay_call = forward_call
-            if func.custom_replay_func is not None:
+            if func.custom_replay_func is not None or func.replay_snippet is not None:
                 replay_call = f"{func.namespace}replay_{func_name}({adj.format_forward_call_args(args_var, use_initializer_list)});"
 
         elif not isinstance(return_type, list) or len(return_type) == 1:
@@ -1536,7 +1557,11 @@ class Adjoint:
 
             # test if we're above max unroll count
             max_iters = abs(end - start) // abs(step)
-            max_unroll = adj.builder.options["max_unroll"]
+
+            if "max_unroll" in adj.builder_options:
+                max_unroll = adj.builder_options["max_unroll"]
+            else:
+                max_unroll = warp.config.max_unroll
 
             ok_to_unroll = True
 
@@ -1667,9 +1692,13 @@ class Adjoint:
         # eval all arguments
         for arg in node.args:
             var = adj.eval(arg)
+            if not is_local_value(var):
+                raise RuntimeError(
+                    "Cannot reference a global variable from a kernel unless `wp.constant()` is being used"
+                )
             args.append(var)
 
-        # eval all keyword ags
+        # eval all keyword args
         def kwval(kw):
             if isinstance(kw.value, ast.Num):
                 return kw.value.n
@@ -1714,6 +1743,8 @@ class Adjoint:
             return var
 
         target = adj.eval(node.value)
+        if not is_local_value(target):
+            raise RuntimeError("Cannot reference a global variable from a kernel unless `wp.constant()` is being used")
 
         indices = []
 
@@ -1804,6 +1835,10 @@ class Adjoint:
 
             target = adj.eval(lhs.value)
             value = adj.eval(node.value)
+            if not is_local_value(value):
+                raise RuntimeError(
+                    "Cannot reference a global variable from a kernel unless `wp.constant()` is being used"
+                )
 
             slice = lhs.slice
             indices = []
@@ -1993,11 +2028,9 @@ class Adjoint:
         # Look up the closure info and append it to adj.func.__globals__
         # in case you want to define a kernel inside a function and refer
         # to variables you've declared inside that function:
-        extract_contents = (
-            lambda contents: contents
-            if isinstance(contents, warp.context.Function) or not callable(contents)
-            else contents
-        )
+        def extract_contents(contents):
+            return contents if isinstance(contents, warp.context.Function) or not callable(contents) else contents
+
         capturedvars = dict(
             zip(
                 adj.func.__code__.co_freevars,
@@ -2204,16 +2237,20 @@ extern "C" __global__ void {name}_cuda_kernel_forward(
 {{
     for (size_t _idx = static_cast<size_t>(blockDim.x) * static_cast<size_t>(blockIdx.x) + static_cast<size_t>(threadIdx.x);
          _idx < dim.size;
-         _idx += static_cast<size_t>(blockDim.x) * static_cast<size_t>(gridDim.x)) {{
-{forward_body}}}}}
+         _idx += static_cast<size_t>(blockDim.x) * static_cast<size_t>(gridDim.x))
+    {{
+{forward_body}    }}
+}}
 
 extern "C" __global__ void {name}_cuda_kernel_backward(
     {reverse_args})
 {{
     for (size_t _idx = static_cast<size_t>(blockDim.x) * static_cast<size_t>(blockIdx.x) + static_cast<size_t>(threadIdx.x);
          _idx < dim.size;
-         _idx += static_cast<size_t>(blockDim.x) * static_cast<size_t>(gridDim.x)) {{
-{reverse_body}}}}}
+         _idx += static_cast<size_t>(blockDim.x) * static_cast<size_t>(gridDim.x))
+    {{
+{reverse_body}    }}
+}}
 
 """
 
@@ -2316,15 +2353,20 @@ def constant_str(value):
 
             scalar_value = runtime.core.half_bits_to_float
         else:
-            scalar_value = lambda x: x
+
+            def scalar_value(x):
+                return x
 
         # list of scalar initializer values
         initlist = []
         for i in range(value._length_):
             x = ctypes.Array.__getitem__(value, i)
-            initlist.append(str(scalar_value(x)))
+            initlist.append(str(scalar_value(x)).lower())
 
-        dtypestr = f"wp::initializer_array<{value._length_},wp::{value._wp_scalar_type_.__name__}>"
+        if value._wp_scalar_type_ is bool:
+            dtypestr = f"wp::initializer_array<{value._length_},{value._wp_scalar_type_.__name__}>"
+        else:
+            dtypestr = f"wp::initializer_array<{value._length_},wp::{value._wp_scalar_type_.__name__}>"
 
         # construct value from initializer array, e.g. wp::initializer_array<4,wp::float32>{1.0, 2.0, 3.0, 4.0}
         return f"{dtypestr}{{{', '.join(initlist)}}}"
@@ -2332,6 +2374,9 @@ def constant_str(value):
     elif value_type in warp.types.scalar_types:
         # make sure we emit the value of objects, e.g. uint32
         return str(value.value)
+
+    elif value == math.inf:
+        return "INFINITY"
 
     else:
         # otherwise just convert constant to string
@@ -2414,103 +2459,93 @@ def codegen_struct(struct, device="cpu", indent_size=4):
     )
 
 
-def codegen_func_forward_body(adj, device="cpu", indent=4):
-    body = []
-    indent_block = " " * indent
-
-    for f in adj.blocks[0].body_forward:
-        body += [f + "\n"]
-
-    return "".join([indent_block + l for l in body])
-
-
 def codegen_func_forward(adj, func_type="kernel", device="cpu"):
-    s = ""
-
-    # primal vars
-    s += "    //---------\n"
-    s += "    // primal vars\n"
-
-    for var in adj.variables:
-        if var.constant is None:
-            s += f"    {var.ctype()} {var.emit()};\n"
-        else:
-            s += f"    const {var.ctype()} {var.emit()} = {constant_str(var.constant)};\n"
-
-    # forward pass
-    s += "    //---------\n"
-    s += "    // forward\n"
-
     if device == "cpu":
-        s += codegen_func_forward_body(adj, device=device, indent=4)
-
+        indent = 4
     elif device == "cuda":
         if func_type == "kernel":
-            s += codegen_func_forward_body(adj, device=device, indent=8)
+            indent = 8
         else:
-            s += codegen_func_forward_body(adj, device=device, indent=4)
-
-    return s
-
-
-def codegen_func_reverse_body(adj, device="cpu", indent=4, func_type="kernel"):
-    body = []
-    indent_block = " " * indent
-
-    # forward pass
-    body += ["//---------\n"]
-    body += ["// forward\n"]
-
-    for f in adj.blocks[0].body_replay:
-        body += [f + "\n"]
-
-    # reverse pass
-    body += ["//---------\n"]
-    body += ["// reverse\n"]
-
-    for l in reversed(adj.blocks[0].body_reverse):
-        body += [l + "\n"]
-
-    # In grid-stride kernels the reverse body is in a for loop
-    if device == "cuda" and func_type == "kernel":
-        body += ["continue;\n"]
-    else:
-        body += ["return;\n"]
-
-    return "".join([indent_block + l for l in body])
-
-
-def codegen_func_reverse(adj, func_type="kernel", device="cpu"):
-    s = ""
-
-    # primal vars
-    s += "    //---------\n"
-    s += "    // primal vars\n"
-
-    for var in adj.variables:
-        if var.constant is None:
-            s += f"    {var.ctype()} {var.emit()};\n"
-        else:
-            s += f"    const {var.ctype()} {var.emit()} = {constant_str(var.constant)};\n"
-
-    # dual vars
-    s += "    //---------\n"
-    s += "    // dual vars\n"
-
-    for var in adj.variables:
-        s += f"    {var.ctype(value_type=True)} {var.emit_adj()} = {{}};\n"
-
-    if device == "cpu":
-        s += codegen_func_reverse_body(adj, device=device, indent=4)
-    elif device == "cuda":
-        if func_type == "kernel":
-            s += codegen_func_reverse_body(adj, device=device, indent=8, func_type=func_type)
-        else:
-            s += codegen_func_reverse_body(adj, device=device, indent=4, func_type=func_type)
+            indent = 4
     else:
         raise ValueError(f"Device {device} not supported for codegen")
 
-    return s
+    indent_block = " " * indent
+
+    # primal vars
+    lines = []
+    lines += ["//---------\n"]
+    lines += ["// primal vars\n"]
+
+    for var in adj.variables:
+        if var.constant is None:
+            lines += [f"{var.ctype()} {var.emit()};\n"]
+        else:
+            lines += [f"const {var.ctype()} {var.emit()} = {constant_str(var.constant)};\n"]
+
+    # forward pass
+    lines += ["//---------\n"]
+    lines += ["// forward\n"]
+
+    for f in adj.blocks[0].body_forward:
+        lines += [f + "\n"]
+
+    return "".join([indent_block + l for l in lines])
+
+
+def codegen_func_reverse(adj, func_type="kernel", device="cpu"):
+    if device == "cpu":
+        indent = 4
+    elif device == "cuda":
+        if func_type == "kernel":
+            indent = 8
+        else:
+            indent = 4
+    else:
+        raise ValueError(f"Device {device} not supported for codegen")
+
+    indent_block = " " * indent
+
+    lines = []
+
+    # primal vars
+    lines += ["//---------\n"]
+    lines += ["// primal vars\n"]
+
+    for var in adj.variables:
+        if var.constant is None:
+            lines += [f"{var.ctype()} {var.emit()};\n"]
+        else:
+            lines += [f"const {var.ctype()} {var.emit()} = {constant_str(var.constant)};\n"]
+
+    # dual vars
+    lines += ["//---------\n"]
+    lines += ["// dual vars\n"]
+
+    for var in adj.variables:
+        lines += [f"{var.ctype(value_type=True)} {var.emit_adj()} = {{}};\n"]
+
+    # forward pass
+    lines += ["//---------\n"]
+    lines += ["// forward\n"]
+
+    for f in adj.blocks[0].body_replay:
+        lines += [f + "\n"]
+
+    # reverse pass
+    lines += ["//---------\n"]
+    lines += ["// reverse\n"]
+
+    for l in reversed(adj.blocks[0].body_reverse):
+        lines += [l + "\n"]
+
+    # In grid-stride kernels the reverse body is in a for loop
+    if device == "cuda" and func_type == "kernel":
+        lines += ["continue;\n"]
+    else:
+        lines += ["return;\n"]
+
+    return "".join([indent_block + l for l in lines])
 
 
 def codegen_func(adj, c_func_name: str, device="cpu", options={}):
@@ -2600,7 +2635,7 @@ def codegen_func(adj, c_func_name: str, device="cpu", options={}):
     return s
 
 
-def codegen_snippet(adj, name, snippet, adj_snippet):
+def codegen_snippet(adj, name, snippet, adj_snippet, replay_snippet):
     forward_args = []
     reverse_args = []
 
@@ -2619,6 +2654,7 @@ def codegen_snippet(adj, name, snippet, adj_snippet):
             reverse_args.append(arg.ctype() + " & adj_" + arg.label)
 
     forward_template = cuda_forward_function_template
+    replay_template = cuda_forward_function_template
     reverse_template = cuda_reverse_function_template
 
     s = ""
@@ -2630,6 +2666,16 @@ def codegen_snippet(adj, name, snippet, adj_snippet):
         filename=adj.filename,
         lineno=adj.fun_lineno,
     )
+
+    if replay_snippet is not None:
+        s += replay_template.format(
+            name="replay_" + name,
+            return_type="void",
+            forward_args=indent(forward_args),
+            forward_body=replay_snippet,
+            filename=adj.filename,
+            lineno=adj.fun_lineno,
+        )
 
     if adj_snippet:
         reverse_body = adj_snippet

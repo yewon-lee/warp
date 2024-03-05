@@ -5,6 +5,7 @@ __pycache__
 *.prof
 warp/kernels
 warp.egg-info
+.[v]env
 .vscode
 archive
 *.o
@@ -15,12 +16,25 @@ archive
 *.pdb
 /_build
 /_repo
-examples/assets/.thumbs
-/examples/tmp
-/docs/_build/doctrees
-/docs/_build/html/_static/fonts
+/docs/_build
+/docs/modules/functions.rst
 /warp_lang.egg-info
 exts/omni.warp/omni/warp/ogn/tests/usd
-build/
+build/lib/
+.venv/
+exts/omni.warp/config/extension.gen.toml
+/external/llvm-project
+/build
+/dist
+.coverage
+.cache
+warp/tests/outputs
 
-examples/assets
+# CUTLASS repo directories we don't want to track
+warp/native/cutlass/.github
+warp/native/cutlass/cmake
+warp/native/cutlass/docs
+warp/native/cutlass/examples
+warp/native/cutlass/media
+warp/native/cutlass/python
+warp/native/cutlass/test

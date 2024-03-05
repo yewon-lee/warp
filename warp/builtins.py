@@ -612,15 +612,19 @@ add_builtin(
 
 
 # scalar type constructors between all storage / compute types
-scalar_types_all = [*scalar_types, int, float]
+scalar_types_all = [*scalar_types, bool, int, float]
 for t in scalar_types_all:
     for u in scalar_types_all:
         add_builtin(
-            t.__name__, input_types={"u": u}, value_type=t, doc="", hidden=True, group="Scalar Math", export=False
+            t.__name__,
+            input_types={"u": u},
+            value_type=t,
+            doc="",
+            hidden=True,
+            group="Scalar Math",
+            export=False,
+            namespace="wp::" if t is not bool else "",
         )
-
-for u in [bool, builtins.bool]:
-    add_builtin(bool.__name__, input_types={"u": u}, value_type=bool, doc="", hidden=True, export=False, namespace="")
 
 
 def vector_constructor_func(arg_types, kwds, templates):
@@ -1195,14 +1199,14 @@ add_builtin(
     input_types={"t": transformation(dtype=Scalar), "p": vector(length=3, dtype=Scalar)},
     value_func=lambda arg_types, kwds, _: vector(length=3, dtype=infer_scalar_type(arg_types)),
     group="Transformations",
-    doc="Apply the transform to a point ``p`` treating the homogenous coordinate as w=1 (translation and rotation).",
+    doc="Apply the transform to a point ``p`` treating the homogeneous coordinate as w=1 (translation and rotation).",
 )
 add_builtin(
     "transform_point",
     input_types={"m": matrix(shape=(4, 4), dtype=Scalar), "p": vector(length=3, dtype=Scalar)},
     value_func=lambda arg_types, kwds, _: vector(length=3, dtype=infer_scalar_type(arg_types)),
     group="Vector Math",
-    doc="""Apply the transform to a point ``p`` treating the homogenous coordinate as w=1.
+    doc="""Apply the transform to a point ``p`` treating the homogeneous coordinate as w=1.
    The transformation is applied treating ``p`` as a column vector, e.g.: ``y = M*p``.
    Note this is in contrast to some libraries, notably USD, which applies transforms to row vectors, ``y^T = p^T*M^T``.
    If the transform is coming from a library that uses row-vectors, then users should transpose the transformation
@@ -1213,14 +1217,14 @@ add_builtin(
     input_types={"t": transformation(dtype=Scalar), "v": vector(length=3, dtype=Scalar)},
     value_func=lambda arg_types, kwds, _: vector(length=3, dtype=infer_scalar_type(arg_types)),
     group="Transformations",
-    doc="Apply the transform to a vector ``v`` treating the homogenous coordinate as w=0 (rotation only).",
+    doc="Apply the transform to a vector ``v`` treating the homogeneous coordinate as w=0 (rotation only).",
 )
 add_builtin(
     "transform_vector",
     input_types={"m": matrix(shape=(4, 4), dtype=Scalar), "v": vector(length=3, dtype=Scalar)},
     value_func=lambda arg_types, kwds, _: vector(length=3, dtype=infer_scalar_type(arg_types)),
     group="Vector Math",
-    doc="""Apply the transform to a vector ``v`` treating the homogenous coordinate as w=0.
+    doc="""Apply the transform to a vector ``v`` treating the homogeneous coordinate as w=0.
    The transformation is applied treating ``v`` as a column vector, e.g.: ``y = M*v``
    note this is in contrast to some libraries, notably USD, which applies transforms to row vectors, ``y^T = v^T*M^T``.
    If the transform is coming from a library that uses row-vectors, then users should transpose the transformation
@@ -2852,7 +2856,7 @@ add_builtin(
     skip_replay=True,
 )
 
-for t in scalar_types + vector_types + [builtins.bool]:
+for t in scalar_types + vector_types + [bool, builtins.bool]:
     if "vec" in t.__name__ or "mat" in t.__name__:
         continue
     add_builtin(
@@ -3242,7 +3246,8 @@ add_builtin(
     "div",
     input_types={"x": Scalar, "y": Scalar},
     value_func=sametype_value_func(Scalar),
-    doc="", group="Operators",
+    doc="",
+    group="Operators",
     require_original_output_arg=True,
 )
 add_builtin(
@@ -3347,91 +3352,3 @@ for t in int_types:
 
 
 add_builtin("unot", input_types={"a": array(dtype=Any)}, value_type=builtins.bool, doc="", group="Operators")
-
-
-@warp.kernel
-def array_assign_sv(src: array(dtype=spatial_vector), dst: array(dtype=spatial_vector)):
-    i = warp.tid()
-    dst[i] = src[i]
-@warp.kernel
-def array_assign_tf(src: array(dtype=transform), dst: array(dtype=transform)):
-    i = warp.tid()
-    dst[i] = src[i]
-@warp.kernel
-def array_assign_v3(src: array(dtype=vec3), dst: array(dtype=vec3)):
-    i = warp.tid()
-    dst[i] = src[i]
-@warp.kernel
-def array_assign_f32(src: array(dtype=float32), dst: array(dtype=float32)):
-    i = warp.tid()
-    dst[i] = src[i]
-@warp.kernel
-def array_assign_i32(src: array(dtype=int32), dst: array(dtype=int32)):
-    i = warp.tid()
-    dst[i] = src[i]
-
-assign_kernels = {
-    float32: array_assign_f32,
-    int32: array_assign_i32,
-    vec3: array_assign_v3,
-    spatial_vector: array_assign_sv,
-    transform: array_assign_tf,
-}
-
-@warp.kernel
-def array_fill_sv(value: spatial_vector, arr: array(dtype=spatial_vector)):
-    i = warp.tid()
-    arr[i] = value
-@warp.kernel
-def array_fill_tf(value: transform, arr: array(dtype=transform)):
-    i = warp.tid()
-    arr[i] = value
-@warp.kernel
-def array_fill_v3(value: vec3, arr: array(dtype=vec3)):
-    i = warp.tid()
-    arr[i] = value
-@warp.kernel
-def array_fill_f32(value: float32, arr: array(dtype=float32)):
-    i = warp.tid()
-    arr[i] = value
-@warp.kernel
-def array_fill_i32(value: int32, arr: array(dtype=int32)):
-    i = warp.tid()
-    arr[i] = value
-
-fill_kernels = {
-    float32: array_fill_f32,
-    int32: array_fill_i32,
-    # vec3: array_fill_v3,
-    # spatial_vector: array_fill_sv,
-    # transform: array_fill_tf,
-}
-
-@warp.kernel
-def array_zero_sv(_: array(dtype=spatial_vector), arr: array(dtype=spatial_vector)):
-    i = warp.tid()
-    arr[i] = spatial_vector(0.0)
-@warp.kernel
-def array_zero_tf(_: array(dtype=transform), arr: array(dtype=transform)):
-    i = warp.tid()
-    arr[i] = transform(vec3(0.0), quat(0.0, 0.0, 0.0, 1.0))
-@warp.kernel
-def array_zero_v3(_: array(dtype=vec3), arr: array(dtype=vec3)):
-    i = warp.tid()
-    arr[i] = vec3(0.0)
-@warp.kernel
-def array_zero_f32(_: array(dtype=float32), arr: array(dtype=float32)):
-    i = warp.tid()
-    arr[i] = 0.0
-@warp.kernel
-def array_zero_i32(_: array(dtype=int32), arr: array(dtype=int32)):
-    i = warp.tid()
-    arr[i] = 0
-
-zero_kernels = {
-    float32: array_zero_f32,
-    int32: array_zero_i32,
-    vec3: array_zero_v3,
-    spatial_vector: array_zero_sv,
-    transform: array_zero_tf,
-}

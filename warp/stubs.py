@@ -56,6 +56,8 @@ from warp.context import get_device, set_device, synchronize_device
 from warp.context import (
     zeros,
     zeros_like,
+    ones,
+    ones_like,
     full,
     full_like,
     clone,
@@ -74,9 +76,14 @@ from warp.context import Kernel, Function, Launch
 from warp.context import Stream, get_stream, set_stream, synchronize_stream
 from warp.context import Event, record_event, wait_event, wait_stream
 from warp.context import RegisteredGLBuffer
+from warp.context import is_mempool_supported, is_mempool_enabled, set_mempool_enabled
+from warp.context import set_mempool_release_threshold, get_mempool_release_threshold
+from warp.context import is_mempool_access_supported, is_mempool_access_enabled, set_mempool_access_enabled
+from warp.context import is_peer_access_supported, is_peer_access_enabled, set_peer_access_enabled
 
 from warp.tape import Tape
 from warp.utils import ScopedTimer, ScopedDevice, ScopedStream
+from warp.utils import ScopedMempool, ScopedMempoolAccess, ScopedPeerAccess
 from warp.utils import transform_expand, quat_between_vectors
 
 from warp.torch import from_torch, to_torch
@@ -731,7 +738,7 @@ def transform_multiply(a: Transformation[Float], b: Transformation[Float]) -> Tr
 @over
 def transform_point(t: Transformation[Scalar], p: Vector[3, Scalar]) -> Vector[3, Scalar]:
     """
-    Apply the transform to a point ``p`` treating the homogenous coordinate as w=1 (translation and rotation).
+    Apply the transform to a point ``p`` treating the homogeneous coordinate as w=1 (translation and rotation).
     """
     ...
 
@@ -739,7 +746,7 @@ def transform_point(t: Transformation[Scalar], p: Vector[3, Scalar]) -> Vector[3
 @over
 def transform_point(m: Matrix[4, 4, Scalar], p: Vector[3, Scalar]) -> Vector[3, Scalar]:
     """
-    Apply the transform to a point ``p`` treating the homogenous coordinate as w=1.
+    Apply the transform to a point ``p`` treating the homogeneous coordinate as w=1.
        The transformation is applied treating ``p`` as a column vector, e.g.: ``y = M*p``.
        Note this is in contrast to some libraries, notably USD, which applies transforms to row vectors, ``y^T = p^T*M^T``.
        If the transform is coming from a library that uses row-vectors, then users should transpose the transformation
@@ -751,7 +758,7 @@ def transform_point(m: Matrix[4, 4, Scalar], p: Vector[3, Scalar]) -> Vector[3, 
 @over
 def transform_vector(t: Transformation[Scalar], v: Vector[3, Scalar]) -> Vector[3, Scalar]:
     """
-    Apply the transform to a vector ``v`` treating the homogenous coordinate as w=0 (rotation only).
+    Apply the transform to a vector ``v`` treating the homogeneous coordinate as w=0 (rotation only).
     """
     ...
 
@@ -759,7 +766,7 @@ def transform_vector(t: Transformation[Scalar], v: Vector[3, Scalar]) -> Vector[
 @over
 def transform_vector(m: Matrix[4, 4, Scalar], v: Vector[3, Scalar]) -> Vector[3, Scalar]:
     """
-    Apply the transform to a vector ``v`` treating the homogenous coordinate as w=0.
+    Apply the transform to a vector ``v`` treating the homogeneous coordinate as w=0.
        The transformation is applied treating ``v`` as a column vector, e.g.: ``y = M*v``
        note this is in contrast to some libraries, notably USD, which applies transforms to row vectors, ``y^T = v^T*M^T``.
        If the transform is coming from a library that uses row-vectors, then users should transpose the transformation
@@ -2177,19 +2184,19 @@ def sub(x: Transformation[Scalar], y: Transformation[Scalar]) -> Transformation[
 
 
 @over
-def logical_and(x: Int, y: Int) -> Int:
+def bit_and(x: Int, y: Int) -> Int:
     """ """
     ...
 
 
 @over
-def logical_or(x: Int, y: Int) -> Int:
+def bit_or(x: Int, y: Int) -> Int:
     """ """
     ...
 
 
 @over
-def logical_xor(x: Int, y: Int) -> Int:
+def bit_xor(x: Int, y: Int) -> Int:
     """ """
     ...
 
@@ -2267,6 +2274,12 @@ def mul(x: Matrix[Any, Any, Scalar], y: Vector[Any, Scalar]) -> Vector[Any, Scal
 
 
 @over
+def mul(x: Vector[Any, Scalar], y: Matrix[Any, Any, Scalar]) -> Vector[Any, Scalar]:
+    """ """
+    ...
+
+
+@over
 def mul(x: Matrix[Any, Any, Scalar], y: Matrix[Any, Any, Scalar]):
     """ """
     ...
@@ -2309,13 +2322,31 @@ def div(x: Vector[Any, Scalar], y: Scalar) -> Vector[Any, Scalar]:
 
 
 @over
+def div(x: Scalar, y: Vector[Any, Scalar]) -> Vector[Any, Scalar]:
+    """ """
+    ...
+
+
+@over
 def div(x: Matrix[Any, Any, Scalar], y: Scalar) -> Matrix[Any, Any, Scalar]:
     """ """
     ...
 
 
 @over
+def div(x: Scalar, y: Matrix[Any, Any, Scalar]) -> Matrix[Any, Any, Scalar]:
+    """ """
+    ...
+
+
+@over
 def div(x: Quaternion[Scalar], y: Scalar) -> Quaternion[Scalar]:
+    """ """
+    ...
+
+
+@over
+def div(x: Scalar, y: Quaternion[Scalar]) -> Quaternion[Scalar]:
     """ """
     ...
 
