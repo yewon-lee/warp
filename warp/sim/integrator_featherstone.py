@@ -22,6 +22,7 @@ from .integrator_euler import (
 )
 
 from .articulation import (
+    eval_fk,
     compute_2d_rotational_dofs,
     compute_3d_rotational_dofs,
 )
@@ -1566,7 +1567,7 @@ class FeatherstoneIntegrator:
             model.L = wp.zeros_like(model.H, requires_grad=model.requires_grad)
 
         if model.body_count:
-            model.body_I_m = wp.empty((model.body_count,), dtype=wp.spatial_matrix, device=model.device)
+            model.body_I_m = wp.empty((model.body_count,), dtype=wp.spatial_matrix, device=model.device, requires_grad=model.requires_grad)
             wp.launch(
                 compute_spatial_inertia,
                 model.body_count,
@@ -1574,7 +1575,7 @@ class FeatherstoneIntegrator:
                 outputs=[model.body_I_m],
                 device=model.device,
             )
-            model.body_X_com = wp.empty((model.body_count,), dtype=wp.transform, device=model.device)
+            model.body_X_com = wp.empty((model.body_count,), dtype=wp.transform, device=model.device, requires_grad=model.requires_grad)
             wp.launch(
                 compute_com_transforms,
                 model.body_count,
@@ -2065,74 +2066,8 @@ class FeatherstoneIntegrator:
                     device=model.device,
                 )
 
-                wp.launch(
-                    eval_rigid_fk,
-                    dim=model.articulation_count,
-                    inputs=[
-                        model.articulation_start,
-                        model.joint_type,
-                        model.joint_parent,
-                        model.joint_child,
-                        model.joint_q_start,
-                        state_out.joint_q,
-                        model.joint_X_p,
-                        model.joint_X_c,
-                        model.body_X_com,
-                        model.joint_axis,
-                        model.joint_axis_start,
-                        model.joint_axis_dim,
-                    ],
-                    outputs=[state_out.body_q, state_out.body_q_com],
-                    device=model.device,
-                )
-
-                # compute body_qd
-                state_out.body_f_s.zero_()
-                wp.launch(
-                    eval_rigid_id,
-                    dim=model.articulation_count,
-                    inputs=[
-                        model.articulation_start,
-                        model.joint_type,
-                        model.joint_parent,
-                        model.joint_child,
-                        model.joint_q_start,
-                        model.joint_qd_start,
-                        state_out.joint_q,
-                        state_out.joint_qd,
-                        model.joint_axis,
-                        model.joint_axis_start,
-                        model.joint_axis_dim,
-                        model.body_I_m,
-                        state_out.body_q,
-                        state_out.body_q_com,
-                        model.joint_X_p,
-                        model.joint_X_c,
-                        model.gravity,
-                    ],
-                    outputs=[
-                        state_out.joint_S_s,
-                        state_out.body_I_s,
-                        state_out.body_v_s,
-                        state_out.body_f_s,
-                        state_out.body_a_s,
-                    ],
-                    device=model.device,
-                )
-
-                # body velocity in inertial frame
-                wp.launch(
-                    kernel=eval_body_inertial_velocities,
-                    dim=model.body_count,
-                    inputs=[
-                        state_out.body_q,
-                        state_out.body_v_s,
-                    ],
-                    outputs=[
-                        state_out.body_qd,
-                    ],
-                    device=model.device,
-                )
+                # update maximal coordinates
+                eval_fk(model, state_out.joint_q, state_out.joint_qd, None, state_out)
 
             # ----------------------------
             # integrate particles
