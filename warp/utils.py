@@ -627,6 +627,8 @@ class ScopedTimer:
                 self.dict[name] = []
 
     def __enter__(self):
+        if warp.context.runtime.tape:
+            warp.context.runtime.tape.record_scope_begin(self.name)
         if self.active:
             if self.synchronize:
                 wp.synchronize()
@@ -650,6 +652,8 @@ class ScopedTimer:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
+        if warp.context.runtime.tape:
+            warp.context.runtime.tape.record_scope_end()
         if self.active:
             if self.synchronize:
                 wp.synchronize()

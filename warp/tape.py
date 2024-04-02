@@ -42,6 +42,7 @@ class Tape:
         self.gradients = {}
         self.const_gradients = set()
         self.launches = []
+        self.scopes = []
 
         self.loss = None
 
@@ -58,6 +59,12 @@ class Tape:
             raise RuntimeError("Warp: Error, ended tape capture, but tape not present")
 
         wp.context.runtime.tape = None
+
+    def record_scope_begin(self, scope_name):
+        self.scopes.append((len(self.launches), scope_name))
+
+    def record_scope_end(self):
+        self.scopes.append((len(self.launches), None))
 
     # adj_outputs is a mapping from output tensor -> adjoint of the output
     # after running backward the gradients of tensors may be retrieved by:
