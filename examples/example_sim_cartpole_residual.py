@@ -259,9 +259,10 @@ with torch.no_grad():
     for i in range(100):
         joint_q, joint_qd = simulate(joint_q, joint_qd, joint_act, model, model_creator.integrator)
         reference_traj[i] = torch.cat([joint_q + small_offset, joint_qd])
-        
+
 # plot reference trajectory
 import matplotlib.pyplot as plt
+
 plt.plot(reference_traj.cpu().numpy())
 plt.show()
 
@@ -279,11 +280,11 @@ for i in range(traj_len):
 
     losses[i] = torch.sum((reference_traj[i] - torch.cat([joint_q, joint_qd])) ** 2)
     rollout_trajectory[i] = torch.cat([joint_q, joint_qd])
-    
+
 # plot rollout trajectory
 plt.plot(rollout_trajectory.detach().cpu().numpy())
 plt.show()
-    
+
 loss = torch.sum(losses) / traj_len
 
 
