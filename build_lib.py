@@ -211,6 +211,7 @@ try:
 except Exception as e:
     # output build error
     print(f"Warp build error: {e}")
+    raise e
 
     # report error
     sys.exit(1)
