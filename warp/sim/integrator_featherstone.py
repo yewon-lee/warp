@@ -1142,31 +1142,31 @@ def dense_gemm(
                 C[C_start + i * n + j] = sum
 
 
-@wp.func_grad(dense_gemm)
-def adj_dense_gemm(
-    m: int,
-    n: int,
-    p: int,
-    transpose_A: bool,
-    transpose_B: bool,
-    add_to_C: bool,
-    A_start: int,
-    B_start: int,
-    C_start: int,
-    A: wp.array(dtype=float),
-    B: wp.array(dtype=float),
-    # outputs
-    C: wp.array(dtype=float),
-):
-    add_to_C = True
-    if transpose_A:
-        dense_gemm(p, m, n, False, True, add_to_C, A_start, B_start, C_start, B, wp.adjoint[C], wp.adjoint[A])
-        dense_gemm(p, n, m, False, False, add_to_C, A_start, B_start, C_start, A, wp.adjoint[C], wp.adjoint[B])
-    else:
-        dense_gemm(
-            m, p, n, False, not transpose_B, add_to_C, A_start, B_start, C_start, wp.adjoint[C], B, wp.adjoint[A]
-        )
-        dense_gemm(p, n, m, True, False, add_to_C, A_start, B_start, C_start, A, wp.adjoint[C], wp.adjoint[B])
+# @wp.func_grad(dense_gemm)
+# def adj_dense_gemm(
+#     m: int,
+#     n: int,
+#     p: int,
+#     transpose_A: bool,
+#     transpose_B: bool,
+#     add_to_C: bool,
+#     A_start: int,
+#     B_start: int,
+#     C_start: int,
+#     A: wp.array(dtype=float),
+#     B: wp.array(dtype=float),
+#     # outputs
+#     C: wp.array(dtype=float),
+# ):
+#     add_to_C = True
+#     if transpose_A:
+#         dense_gemm(p, m, n, False, True, add_to_C, A_start, B_start, C_start, B, wp.adjoint[C], wp.adjoint[A])
+#         dense_gemm(p, n, m, False, False, add_to_C, A_start, B_start, C_start, A, wp.adjoint[C], wp.adjoint[B])
+#     else:
+#         dense_gemm(
+#             m, p, n, False, not transpose_B, add_to_C, A_start, B_start, C_start, wp.adjoint[C], B, wp.adjoint[A]
+#         )
+#         dense_gemm(p, n, m, True, False, add_to_C, A_start, B_start, C_start, A, wp.adjoint[C], wp.adjoint[B])
 
 
 @wp.kernel
