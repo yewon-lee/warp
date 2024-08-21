@@ -762,6 +762,9 @@ def broadphase_collision_pairs(
     shape_a = contact_pairs[tid, 0]
     shape_b = contact_pairs[tid, 1]
 
+    if shape_a == shape_b:
+        return
+
     mass_a = 0.0
     mass_b = 0.0
     rigid_a = shape_body[shape_a]
